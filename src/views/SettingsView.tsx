@@ -95,7 +95,7 @@ export default function SettingsView({ onChanged }: { onChanged: () => void }) {
 
       <section>
         <h3>バージョン情報</h3>
-        <p>Tsuzukikara {info?.version ?? ""} — MIT License（予定）</p>
+        <p>Tsuzukikara {info?.version ?? ""} — MIT License</p>
       </section>
     </div>
   );
