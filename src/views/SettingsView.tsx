@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, AppInfo, Settings, TagUsage } from "../api";
-import { ColorPicker, TagChip } from "../components/Tags";
+import { TagChip, TagEditor } from "../components/Tags";
 import { useI18n } from "../i18n";
 import { LOCALES } from "../i18n/locales";
 
@@ -133,7 +133,7 @@ export default function SettingsView({ onChanged }: { onChanged: () => void }) {
 function TagManager({ onChanged, onError }: { onChanged: () => void; onError: (e: unknown) => void }) {
   const { t } = useI18n();
   const [tags, setTags] = useState<TagUsage[]>([]);
-  const [editing, setEditing] = useState<{ id: number; name: string; color: string } | null>(null);
+  const [editing, setEditing] = useState<number | null>(null);
   const [deleting, setDeleting] = useState<TagUsage | null>(null);
 
   const load = useCallback(() => {
@@ -141,18 +141,6 @@ function TagManager({ onChanged, onError }: { onChanged: () => void; onError: (e
   }, [onError]);
 
   useEffect(load, [load]);
-
-  async function save() {
-    if (!editing) return;
-    try {
-      await api.updateTag(editing.id, editing.name, editing.color);
-      setEditing(null);
-      load();
-      onChanged();
-    } catch (e) {
-      onError(e);
-    }
-  }
 
   async function remove(tag: TagUsage) {
     setDeleting(null);
@@ -173,29 +161,26 @@ function TagManager({ onChanged, onError }: { onChanged: () => void; onError: (e
       <ul className="tag-list">
         {tags.map((tag) => (
           <li key={tag.id}>
-            {editing?.id === tag.id ? (
-              <div className="tag-edit">
-                <input
-                  value={editing.name}
-                  maxLength={40}
-                  onChange={(e) => setEditing({ ...editing, name: e.target.value })}
-                  onKeyDown={(e) => e.key === "Enter" && save()}
-                />
-                <ColorPicker value={editing.color} onChange={(color) => setEditing({ ...editing, color })} />
-                <div className="actions">
-                  <TagChip tag={{ id: tag.id, name: editing.name || tag.name, color: editing.color }} />
-                  <button className="primary" onClick={save} disabled={!editing.name.trim()}>
-                    {t("settings.save")}
-                  </button>
-                  <button onClick={() => setEditing(null)}>{t("session.cancel")}</button>
-                </div>
-              </div>
+            {editing === tag.id ? (
+              <TagEditor
+                tag={tag}
+                onSaved={() => {
+                  setEditing(null);
+                  load();
+                  onChanged();
+                }}
+                onCancel={() => setEditing(null)}
+                onError={onError}
+              />
             ) : (
               <div className="tag-line">
-                <button className="link-button" onClick={() => setEditing({ id: tag.id, name: tag.name, color: tag.color })}>
+                <button className="link-button" onClick={() => setEditing(tag.id)}>
                   <TagChip tag={tag} />
                 </button>
                 <span className="muted small">{t("tags.sessions", { count: tag.session_count })}</span>
+                <button className="small-button" onClick={() => setEditing(tag.id)}>
+                  {t("tags.edit")}
+                </button>
                 <button className="small-button" onClick={() => setDeleting(tag)}>
                   {t("tags.delete")}
                 </button>

@@ -595,6 +595,25 @@ pub fn rename_session(conn: &Connection, external_session_id: &str, title: Optio
     Ok(())
 }
 
+/// After a title was written to the history file: show it as the agent's own title right away
+/// (the next scan re-reads the file and finds the same value) and drop any app-only override.
+pub fn apply_history_title(conn: &mut Connection, file_path: &str, external_session_id: &str, title: &str) -> rusqlite::Result<()> {
+    let tx = conn.transaction()?;
+    let row: Option<(i64, Option<String>)> = tx
+        .query_row("SELECT id, cwd FROM sessions WHERE file_path = ?1", [file_path], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?;
+    if let Some((id, cwd)) = row {
+        tx.execute("UPDATE sessions SET title = ?1 WHERE id = ?2", params![title, id])?;
+        tx.execute("DELETE FROM sessions_fts WHERE rowid = ?1", [id])?;
+        tx.execute(
+            "INSERT INTO sessions_fts(rowid, title, project_path) VALUES (?1, ?2, ?3)",
+            params![id, title, cwd.unwrap_or_default()],
+        )?;
+    }
+    tx.execute("DELETE FROM session_titles WHERE external_session_id = ?1", [external_session_id])?;
+    tx.commit()
+}
+
 #[derive(Debug, Serialize)]
 pub struct TagUsage {
     #[serde(flatten)]

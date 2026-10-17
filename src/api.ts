@@ -172,7 +172,9 @@ export interface AppInfo {
 export const api = {
   search: (params: SearchParams) => invoke<SearchResult>("search", { params }),
   getSession: (id: number) => invoke<SessionDetail>("get_session", { id }),
-  renameSession: (id: number, title: string | null) => invoke<void>("rename_session", { id, title }),
+  renameSession: (id: number, title: string | null, writeToHistory = false) =>
+    invoke<void>("rename_session", { id, title, writeToHistory }),
+  historyWriteCheck: (id: number) => invoke<{ recently_active: boolean }>("history_write_check", { id }),
   filterOptions: () => invoke<FilterOptions>("filter_options"),
   listTags: () => invoke<TagUsage[]>("list_tags"),
   createTag: (name: string, color: string) => invoke<TagView>("create_tag", { name, color }),

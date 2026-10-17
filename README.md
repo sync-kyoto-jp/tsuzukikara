@@ -5,7 +5,7 @@
 **Tsuzukikara** is a local-first desktop app for searching past AI coding agent sessions (currently Claude Code), reading them, and resuming them in their original environment. It works across native Windows and WSL2.
 
 - **No network access** — no telemetry, analytics or cloud APIs. The UI's Content Security Policy blocks outbound connections.
-- **Read-only** — history files under `~/.claude/projects` are never modified or deleted.
+- **Read-only by default** — history files under `~/.claude/projects` are never deleted, and are modified only when you explicitly choose to write a session name back (see below).
 - **Opt-in WSL** — a WSL distribution is read only after you allow it.
 
 ## Features
@@ -17,8 +17,8 @@
 - **Result list** — title (or the first prompt when untitled), tags, environment, project, branch, last updated time, number of hits, and a highlighted excerpt. Sessions present in more than one file are marked as duplicates.
 - **Conversation preview** — the full conversation in order, with search terms highlighted. Strings that look like API keys, tokens or private keys are masked by default.
 - **Resume** — opens a new terminal running `claude --resume <session-id>` in the session's working directory, after checking that the directory exists and that the `claude` CLI can start there, and after you confirm the command. Works for Windows and WSL sessions, including CLIs installed through Node version managers such as nodenv.
-- **Session names** — rename a session for display in this app. The name is stored only in the app; Claude Code's history is not changed. The original title can be restored at any time.
-- **Tags** — attach any number of colored tags to a session. Tags appear as colored pills in the list and in the detail view, can be created from a preset palette or a custom color, and can be renamed, recolored or deleted in Settings.
+- **Session names** — rename a session. By default the name is stored only in this app and the original title can be restored at any time. When saving, you can tick an option to also write the name to Claude Code's history: a `custom-title` record is appended to the session's transcript so Claude Code shows the same name (for example in `/resume`). The app checks that the file belongs to the session, never rewrites existing content, and warns when the session was updated in the last two minutes and may still be running.
+- **Tags** — attach any number of colored tags to a session. Tags appear as colored pills in the list and in the detail view and can be created from a preset palette or a custom color. Click a tag in the detail view, or use Settings, to change its name or color; Settings also lets you delete tags.
 - **Languages** — English, Japanese, French, Spanish and Korean, switchable in Settings. The default follows the system language.
 - **Settings** — exclude folders or files from the index, delete the index, and review the privacy policy. Tags and session names are kept when the index is deleted.
 

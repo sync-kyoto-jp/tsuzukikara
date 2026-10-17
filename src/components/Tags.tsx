@@ -151,3 +151,108 @@ export function TagPicker({ assigned, onChange, onError }: PickerProps) {
     </div>
   );
 }
+
+/** Name + color form for an existing tag. */
+export function TagEditor({
+  tag,
+  onSaved,
+  onCancel,
+  onError,
+}: {
+  tag: TagView;
+  onSaved: (tag: TagView) => void;
+  onCancel: () => void;
+  onError: (e: unknown) => void;
+}) {
+  const { t } = useI18n();
+  const [name, setName] = useState(tag.name);
+  const [color, setColor] = useState(tag.color);
+
+  async function save() {
+    try {
+      onSaved(await api.updateTag(tag.id, name, color));
+    } catch (e) {
+      onError(e);
+    }
+  }
+
+  return (
+    <div className="tag-editor">
+      <input
+        autoFocus
+        value={name}
+        maxLength={40}
+        placeholder={t("tags.namePlaceholder")}
+        onChange={(e) => setName(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && name.trim()) save();
+          if (e.key === "Escape") onCancel();
+        }}
+      />
+      <ColorPicker value={color} onChange={setColor} />
+      <div className="actions">
+        <TagChip tag={{ id: tag.id, name: name.trim() || tag.name, color }} />
+        <button className="primary" onClick={save} disabled={!name.trim()}>
+          {t("session.save")}
+        </button>
+        <button onClick={onCancel}>{t("session.cancel")}</button>
+      </div>
+      <p className="muted small">{t("tags.editHint")}</p>
+    </div>
+  );
+}
+
+/** Tag chip that opens an editor for its name and color when clicked. */
+export function EditableTagChip({
+  tag,
+  onRemove,
+  onEdited,
+  onError,
+}: {
+  tag: TagView;
+  onRemove?: () => void;
+  onEdited: (tag: TagView) => void;
+  onError: (e: unknown) => void;
+}) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+
+  return (
+    <div className="tag-picker" ref={ref}>
+      {/* A span, not a button: the chip's own remove button cannot be nested in a button. */}
+      <span
+        className="link-button"
+        role="button"
+        tabIndex={0}
+        title={t("tags.editTag")}
+        onClick={() => setOpen((o) => !o)}
+        onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && setOpen((o) => !o)}
+      >
+        <TagChip tag={tag} onRemove={onRemove} />
+      </span>
+      {open && (
+        <div className="popover">
+          <TagEditor
+            tag={tag}
+            onSaved={(edited) => {
+              setOpen(false);
+              onEdited(edited);
+            }}
+            onCancel={() => setOpen(false)}
+            onError={onError}
+          />
+        </div>
+      )}
+    </div>
+  );
+}

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, ResumePlan, SessionDetail, TagView } from "../api";
 import { HighlightTerms } from "../components/Highlight";
-import { TagChip, TagPicker } from "../components/Tags";
+import { EditableTagChip, TagPicker } from "../components/Tags";
 import { useI18n } from "../i18n";
 import { sourceLabel, titleOrUntitled } from "../labels";
 import { maskSecrets } from "../secrets";
@@ -26,6 +26,8 @@ export default function SessionDetailView({ id, query, onChanged }: Props) {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
+  // Second step of saving a name: choose whether to also write it to Claude Code's history.
+  const [confirmTitle, setConfirmTitle] = useState<{ writeToHistory: boolean; recentlyActive: boolean } | null>(null);
 
   useEffect(() => {
     setDetail(null);
@@ -34,6 +36,7 @@ export default function SessionDetailView({ id, query, onChanged }: Props) {
     setNotice(null);
     setReveal(false);
     setEditingTitle(false);
+    setConfirmTitle(null);
     api
       .getSession(id)
       .then((d) => {
@@ -81,13 +84,30 @@ export default function SessionDetailView({ id, query, onChanged }: Props) {
     }
   }
 
-  async function saveTitle(title: string | null) {
+  async function askSaveTitle() {
+    if (!titleDraft.trim()) return;
+    let recentlyActive = false;
+    try {
+      recentlyActive = (await api.historyWriteCheck(id)).recently_active;
+    } catch {
+      // The check only adds a warning; saving is still possible without it.
+    }
+    setConfirmTitle({ writeToHistory: false, recentlyActive });
+  }
+
+  async function saveTitle(title: string | null, writeToHistory = false) {
     if (!detail) return;
     try {
-      await api.renameSession(id, title);
+      await api.renameSession(id, title, writeToHistory);
       const trimmed = title?.trim() ?? "";
-      setDetail({ ...detail, title: trimmed || detail.original_title, renamed: trimmed !== "" });
+      if (writeToHistory) {
+        // The name is now the agent's own title; no app-only override remains.
+        setDetail({ ...detail, title: trimmed, original_title: trimmed, renamed: false });
+      } else {
+        setDetail({ ...detail, title: trimmed || detail.original_title, renamed: trimmed !== "" });
+      }
       setEditingTitle(false);
+      setConfirmTitle(null);
       onChanged();
     } catch (e) {
       setNotice({ kind: "error", error: e });
@@ -119,19 +139,50 @@ export default function SessionDetailView({ id, query, onChanged }: Props) {
               value={titleDraft}
               maxLength={200}
               onChange={(e) => setTitleDraft(e.target.value)}
+              disabled={confirmTitle != null}
               onKeyDown={(e) => {
-                if (e.key === "Enter") saveTitle(titleDraft);
+                if (e.key === "Enter") askSaveTitle();
                 if (e.key === "Escape") setEditingTitle(false);
               }}
             />
-            <div className="actions">
-              <button className="primary" onClick={() => saveTitle(titleDraft)} disabled={!titleDraft.trim()}>
-                {t("session.save")}
-              </button>
-              <button onClick={() => setEditingTitle(false)}>{t("session.cancel")}</button>
-              {detail.renamed && <button onClick={() => saveTitle(null)}>{t("session.resetTitle")}</button>}
-            </div>
-            <p className="muted small">{t("session.renameHint")}</p>
+            {confirmTitle == null ? (
+              <>
+                <div className="actions">
+                  <button className="primary" onClick={askSaveTitle} disabled={!titleDraft.trim()}>
+                    {t("session.save")}
+                  </button>
+                  <button onClick={() => setEditingTitle(false)}>{t("session.cancel")}</button>
+                  {detail.renamed && <button onClick={() => saveTitle(null)}>{t("session.resetTitle")}</button>}
+                </div>
+                <p className="muted small">{t("session.renameHint")}</p>
+              </>
+            ) : (
+              <div className="confirm">
+                <p>{t("session.saveNameConfirm", { title: titleDraft.trim() })}</p>
+                <label className="checkbox-line">
+                  <input
+                    type="checkbox"
+                    checked={confirmTitle.writeToHistory}
+                    onChange={(e) => setConfirmTitle({ ...confirmTitle, writeToHistory: e.target.checked })}
+                  />
+                  {t("session.writeHistory")}
+                </label>
+                {confirmTitle.writeToHistory ? (
+                  <>
+                    <p className="muted small">{t("session.writeHistoryHint")}</p>
+                    {confirmTitle.recentlyActive && <p className="warning">⚠ {t("session.writeHistoryActive")}</p>}
+                  </>
+                ) : (
+                  <p className="muted small">{t("session.appOnlyHint")}</p>
+                )}
+                <div className="actions">
+                  <button className="primary" onClick={() => saveTitle(titleDraft, confirmTitle.writeToHistory)}>
+                    {t("session.save")}
+                  </button>
+                  <button onClick={() => setConfirmTitle(null)}>{t("session.cancel")}</button>
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           <div className="title-row">
@@ -159,10 +210,15 @@ export default function SessionDetailView({ id, query, onChanged }: Props) {
 
         <div className="tag-row detail-tags">
           {detail.tags.map((tag) => (
-            <TagChip
+            <EditableTagChip
               key={tag.id}
               tag={tag}
               onRemove={canEdit ? () => saveTags(detail.tags.filter((x) => x.id !== tag.id)) : undefined}
+              onEdited={(edited) => {
+                setDetail({ ...detail, tags: detail.tags.map((x) => (x.id === edited.id ? edited : x)) });
+                onChanged();
+              }}
+              onError={(e) => setNotice({ kind: "error", error: e })}
             />
           ))}
           {canEdit && (

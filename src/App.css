@@ -252,3 +252,7 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; padding: 0 1
 .title-edit input { width: 100%; font-size: 16px; font-weight: 600; }
 .detail-header > p.muted.small { margin: 0 0 8px; }
 .notice.error { background: transparent; border: 1px solid var(--danger); }
+.checkbox-line { display: flex; align-items: center; gap: 6px; margin: 6px 0; font-weight: 600; }
+.tag-editor input { width: 100%; max-width: 280px; }
+.tag-editor .muted.small { margin: 4px 0 0; }
+.confirm .warning { margin: 6px 0; }

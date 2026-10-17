@@ -1,5 +1,6 @@
 mod db;
 mod error;
+mod history_write;
 mod indexer;
 mod parser;
 mod resume;
@@ -284,14 +285,35 @@ fn get_session_inner(state: &AppState, id: i64) -> CmdResult<db::SessionDetail> 
     db::session_detail(&state.conn.lock().unwrap(), id)?.ok_or_else(|| AppError::new("session_not_found"))
 }
 
-/// Sets the app-only display name of a session (`None` or blank restores the agent's title).
+/// Renames a session. By default the name is stored only in this app; with `write_to_history`
+/// it is also appended to the agent's transcript so Claude Code shows it too. `None` or a blank
+/// title restores the agent's title (app-only; nothing is written).
 #[tauri::command]
-fn rename_session(state: State<AppState>, id: i64, title: Option<String>) -> CmdResult<()> {
-    let ext = external_id_of(&state, id)?;
+fn rename_session(state: State<AppState>, id: i64, title: Option<String>, write_to_history: Option<bool>) -> CmdResult<()> {
+    let detail = get_session_inner(&state, id)?;
+    let ext = detail.external_session_id.clone().ok_or_else(|| AppError::new("session_id_missing"))?;
     if title.as_deref().is_some_and(|t| t.chars().count() > 200) {
         return Err(AppError::new("title_too_long"));
     }
-    Ok(db::rename_session(&state.conn.lock().unwrap(), &ext, title.as_deref())?)
+    match title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        Some(t) if write_to_history == Some(true) => {
+            history_write::append_custom_title(std::path::Path::new(&detail.file_path), &ext, t)?;
+            Ok(db::apply_history_title(&mut state.conn.lock().unwrap(), &detail.file_path, &ext, t)?)
+        }
+        _ => Ok(db::rename_session(&state.conn.lock().unwrap(), &ext, title.as_deref())?),
+    }
+}
+
+#[derive(Serialize)]
+struct HistoryWriteCheck {
+    /// The transcript changed within the last two minutes; the session may still be running.
+    recently_active: bool,
+}
+
+#[tauri::command]
+fn history_write_check(state: State<AppState>, id: i64) -> CmdResult<HistoryWriteCheck> {
+    let detail = get_session_inner(&state, id)?;
+    Ok(HistoryWriteCheck { recently_active: history_write::recently_active(std::path::Path::new(&detail.file_path)) })
 }
 
 #[tauri::command]
@@ -406,6 +428,7 @@ pub fn run() {
             search,
             get_session,
             rename_session,
+            history_write_check,
             list_tags,
             create_tag,
             update_tag,

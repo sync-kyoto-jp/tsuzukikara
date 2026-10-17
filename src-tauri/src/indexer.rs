@@ -435,6 +435,31 @@ mod tests {
         assert!(search(&conn, "").hits[0].tags.is_empty());
     }
 
+    #[test]
+    fn title_written_to_history_survives_rescan() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root_dir = tmp.path().join("projects");
+        let a = "eeeeeeee-0000-0000-0000-000000000005";
+        let file = write_session(&root_dir, "C--work-delta", a, &[
+            user(a, "2026-05-01T10:00:00.000Z", r"C:\work\delta", "最初の質問"),
+        ]);
+        let mut conn = db::open(&tmp.path().join("index.sqlite")).unwrap();
+        let root = custom_root(&root_dir);
+        scan_source(&mut conn, &root, &[], &mut |_, _| {}).unwrap();
+        db::rename_session(&conn, a, Some("仮の名前")).unwrap();
+
+        let path = file.to_string_lossy().into_owned();
+        crate::history_write::append_custom_title(&file, a, "正式名称").unwrap();
+        db::apply_history_title(&mut conn, &path, a, "正式名称").unwrap();
+        let hit = &search(&conn, "正式名称").hits[0];
+        assert_eq!((hit.title.as_str(), hit.renamed), ("正式名称", false), "app-only override is dropped");
+
+        let r = scan_source(&mut conn, &root, &[], &mut |_, _| {}).unwrap();
+        assert_eq!(r.updated, 1, "the appended file is re-read");
+        let hit = &search(&conn, "").hits[0];
+        assert_eq!((hit.title.as_str(), hit.renamed), ("正式名称", false));
+    }
+
     /// Measures a full scan and a few searches against the local Windows history. Prints only
     /// counts and timings, never content. Run with: cargo test --release -- --ignored --nocapture
     #[test]
