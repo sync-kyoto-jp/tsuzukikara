@@ -1,25 +1,26 @@
-# セキュリティ方針
+# Security Policy
 
-## 前提
+## Assumptions
 
-AI エージェントの会話履歴には、API キー、トークン、パスワード、顧客のソースコードなどの機密情報が含まれる前提で設計しています。
+AI agent conversation history is assumed to contain sensitive information such as API keys, tokens, passwords and customer source code.
 
-## 実装上の対策
+## Safeguards
 
-- **外部通信なし**: ネットワーク機能を持つ依存を入れていません。WebView には `connect-src ipc:` の CSP を設定し、外部への接続を遮断しています。
-- **原本は読み取り専用**: 履歴ファイルは読み込みのためだけに開きます。
-- **インデックスの最小化**: ツール実行結果と thinking ブロックは取り込みません。
-- **ログに本文を出さない**: スキャンエラーとして記録するのはファイルパスと短いエラー要約だけで、会話の内容は記録しません。
-- **表示時の伏せ字**: プレビューでは、よくある形式の認証情報を既定で伏せます（すべてを検出できるわけではありません）。
-- **WSL はオプトイン**: ユーザーが許可したディストリビューションだけを読み取ります。
-- **再開コマンドの入力検証**: セッション ID（16 進数とハイフンのみ）、ディストリビューション名、作業ディレクトリ（引用符・`$`・バッククォート・制御文字は不可）を検証してからコマンドを組み立てます。実行前には必ずユーザーの確認を挟みます。
-- **データの削除**: 設定画面から検索インデックスを完全に削除できます（削除後に VACUUM を実行）。
+- **No network access**: the app has no networking dependencies. The WebView's CSP (`connect-src ipc:`) blocks outbound connections.
+- **Read-only history**: history files are opened for reading only.
+- **Minimal index**: tool results and thinking blocks are not indexed.
+- **No content in logs**: scan errors record only the file path, an error code and a short system message, never conversation content.
+- **Masking in the preview**: common credential formats are masked by default. Detection is pattern-based and not exhaustive.
+- **Opt-in WSL**: only distributions the user explicitly allows are read.
+- **Validated resume command**: the session id (hex digits and hyphens), distribution name and working directory (no quotes, `$`, backticks or control characters) are validated before the command is built, and the user always confirms before it runs.
+- **Local-only user data**: session names and tags are stored in the local index and never written to the agent's history files.
+- **Data deletion**: the search index can be deleted from Settings (followed by `VACUUM`).
 
-## 既知のリスク
+## Known risks
 
-- インデックス（`index.sqlite`）には会話本文の複製が平文で保存されます。保護は OS のユーザープロファイルの権限に依存します。暗号化は今後の検討事項です。
-- 伏せ字はパターンに一致したものだけが対象です。
+- The index (`index.sqlite`) stores copies of conversation text in plain text. Its protection relies on the permissions of the OS user profile. Encryption is under consideration.
+- Masking only covers strings that match known patterns.
 
-## 脆弱性の報告
+## Reporting a vulnerability
 
-公開後はリポジトリの Security Advisories（非公開の報告）から連絡してください。公開の Issue には書かないでください。
+Please report vulnerabilities privately through GitHub Security Advisories on this repository. Do not open a public issue.

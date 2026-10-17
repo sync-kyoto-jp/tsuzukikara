@@ -14,14 +14,15 @@ const PATTERNS: RegExp[] = [
   /\b((?:password|passwd|secret|token|api[_-]?key)\s*[:=]\s*)["']?[^\s"']{6,}/gi,
 ];
 
-export function maskSecrets(text: string): { text: string; masked: number } {
+/** Replaces secret-like substrings with `••••` followed by the localized `label`. */
+export function maskSecrets(text: string, label: string): { text: string; masked: number } {
   let masked = 0;
   let out = text;
   for (const re of PATTERNS) {
     out = out.replace(re, (match, prefix?: string) => {
       masked++;
       const keep = typeof prefix === "string" && match.startsWith(prefix) ? prefix : "";
-      return `${keep}••••[秘匿]`;
+      return `${keep}••••${label}`;
     });
   }
   return { text: out, masked };

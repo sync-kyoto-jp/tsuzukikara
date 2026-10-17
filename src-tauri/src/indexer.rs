@@ -4,6 +4,7 @@
 //! Files are opened read-only and never modified. Errors are recorded per file (path and a short
 //! summary only — never transcript content) and do not stop the rest of the scan.
 
+use crate::error::AppError;
 use crate::parser::{self, ParsedSession};
 use crate::sources::{self, SourceRoot};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
@@ -22,6 +23,8 @@ pub struct ScanReport {
     pub unchanged: usize,
     pub removed: usize,
     pub errors: usize,
+    /// Set when the whole source could not be scanned (e.g. a WSL distribution failed to start).
+    pub error: Option<AppError>,
 }
 
 /// Hashes bytes as they are read, so the file is read once for both parsing and hashing.
@@ -64,11 +67,12 @@ fn upsert_source(conn: &Connection, root: &SourceRoot) -> rusqlite::Result<i64> 
     conn.query_row("SELECT id FROM sources WHERE key = ?1", [&root.key], |r| r.get(0))
 }
 
-fn record_error(conn: &Connection, source_id: i64, file: Option<&Path>, summary: &str) {
+/// Records a per-file problem as a code (translated by the UI) plus untranslated detail.
+fn record_error(conn: &Connection, source_id: i64, file: Option<&Path>, code: &str, detail: Option<String>) {
     // Best effort: failing to record an error must not abort the scan.
     let _ = conn.execute(
-        "INSERT INTO scan_errors(source_id, occurred_at, file_path, error_summary) VALUES (?1, ?2, ?3, ?4)",
-        params![source_id, now_rfc3339(), file.map(|f| f.to_string_lossy().into_owned()), summary],
+        "INSERT INTO scan_errors(source_id, occurred_at, file_path, code, detail) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![source_id, now_rfc3339(), file.map(|f| f.to_string_lossy().into_owned()), code, detail],
     );
 }
 
@@ -178,7 +182,7 @@ pub fn scan_source(
         Ok(f) => f,
         Err(e) => {
             report.status = if e.kind() == std::io::ErrorKind::NotFound { "not_found" } else { "error" }.into();
-            record_error(conn, source_id, Some(&root.root_path), &format!("履歴ディレクトリを読めません: {e}"));
+            record_error(conn, source_id, Some(&root.root_path), "root_unreadable", Some(e.to_string()));
             report.errors = 1;
             conn.execute(
                 "UPDATE sources SET status = ?1, last_scan_at = ?2 WHERE id = ?3",
@@ -198,7 +202,7 @@ pub fn scan_source(
         let meta = match std::fs::metadata(file) {
             Ok(m) => m,
             Err(e) => {
-                record_error(conn, source_id, Some(file), &format!("ファイル情報を取得できません: {e}"));
+                record_error(conn, source_id, Some(file), "file_stat_failed", Some(e.to_string()));
                 report.errors += 1;
                 progress(i + 1, files.len());
                 continue;
@@ -223,7 +227,7 @@ pub fn scan_source(
             if s == size && m == mtime {
                 report.unchanged += 1;
                 if bad > 0 {
-                    record_error(conn, source_id, Some(file), &format!("{bad} 行を解析できずスキップしました"));
+                    record_error(conn, source_id, Some(file), "lines_skipped", Some(bad.to_string()));
                 }
                 progress(i + 1, files.len());
                 continue;
@@ -238,18 +242,13 @@ pub fn scan_source(
         match parsed {
             Ok((parsed, hash)) => {
                 if parsed.bad_lines > 0 {
-                    record_error(
-                        conn,
-                        source_id,
-                        Some(file),
-                        &format!("{} 行を解析できずスキップしました", parsed.bad_lines),
-                    );
+                    record_error(conn, source_id, Some(file), "lines_skipped", Some(parsed.bad_lines.to_string()));
                 }
                 store_session(conn, source_id, file, size, mtime, hash, &parsed)?;
                 report.updated += 1;
             }
             Err(e) => {
-                record_error(conn, source_id, Some(file), &format!("ファイルを開けません: {e}"));
+                record_error(conn, source_id, Some(file), "file_open_failed", Some(e.to_string()));
                 report.errors += 1;
             }
         }
@@ -402,14 +401,38 @@ mod tests {
         assert_eq!(d.messages[1].role, "assistant");
         assert_eq!(d.title, "質問です");
 
-        db::set_project_tag(&conn, r"C:\work\gamma", Some("顧客G")).unwrap();
-        let res = db::search(&conn, &db::SearchParams { client_tag: Some("顧客G".into()), ..Default::default() }).unwrap();
-        assert_eq!(res.total, 1);
-        assert_eq!(db::client_tags(&conn).unwrap(), vec!["顧客G".to_string()]);
+        // Multiple coloured tags; filtering requires every selected tag; tag names are searchable.
+        let g = db::create_tag(&conn, "顧客G", "#ef4444").unwrap();
+        let urgent = db::create_tag(&conn, "urgent", "#f59e0b").unwrap();
+        db::set_session_tags(&mut conn, a, &[g.id, urgent.id]).unwrap();
+        let hit = &search(&conn, "").hits[0];
+        assert_eq!(hit.tags.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), vec!["urgent", "顧客G"]);
+        fn by_tags(conn: &Connection, ids: Vec<i64>) -> usize {
+            db::search(conn, &db::SearchParams { tag_ids: ids, ..Default::default() }).unwrap().total
+        }
+        assert_eq!(by_tags(&conn, vec![g.id, urgent.id]), 1);
+        db::set_session_tags(&mut conn, a, &[g.id]).unwrap();
+        assert_eq!(by_tags(&conn, vec![g.id, urgent.id]), 0);
+        assert_eq!(search(&conn, "顧客G").total, 1);
 
+        // Renaming changes only the display title and is searchable; clearing restores it.
+        db::rename_session(&conn, a, Some("  見積もり対応  ")).unwrap();
+        let d = db::session_detail(&conn, hit.session_id).unwrap().unwrap();
+        assert_eq!((d.title.as_str(), d.original_title.as_str(), d.renamed), ("見積もり対応", "質問です", true));
+        assert_eq!(search(&conn, "見積").total, 1);
+
+        // User data survives index deletion and a rescan.
         db::clear_index(&conn).unwrap();
         assert_eq!(search(&conn, "").total, 0);
-        assert_eq!(db::client_tags(&conn).unwrap().len(), 1, "tags survive index deletion");
+        scan_source(&mut conn, &custom_root(&root_dir), &[], &mut |_, _| {}).unwrap();
+        let hit = &search(&conn, "").hits[0];
+        assert_eq!(hit.title, "見積もり対応");
+        assert_eq!(hit.tags.len(), 1);
+
+        db::rename_session(&conn, a, Some("")).unwrap();
+        assert_eq!(search(&conn, "").hits[0].title, "質問です");
+        db::delete_tag(&conn, g.id).unwrap();
+        assert!(search(&conn, "").hits[0].tags.is_empty());
     }
 
     /// Measures a full scan and a few searches against the local Windows history. Prints only

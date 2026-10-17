@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local planning notes (not published)
+ai_session_finder_requirements.md

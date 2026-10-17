@@ -1,10 +1,19 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, errorText, formatDate, SourceView } from "../api";
+import { api, AppError, SourceView } from "../api";
+import { MessageKey, useI18n } from "../i18n";
+
+const STATUS_KEYS: Record<string, MessageKey> = {
+  ok: "sources.status.ok",
+  not_found: "sources.status.not_found",
+  pending: "sources.status.pending",
+  error: "sources.status.error",
+};
 
 export default function SourcesView({ revision, onChanged }: { revision: number; onChanged: () => void }) {
+  const { t, te, formatDate } = useI18n();
   const [sources, setSources] = useState<SourceView[]>([]);
-  const [wslError, setWslError] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [wslError, setWslError] = useState<AppError | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [newRoot, setNewRoot] = useState("");
   const [pendingWsl, setPendingWsl] = useState<string | null>(null);
 
@@ -15,7 +24,7 @@ export default function SourcesView({ revision, onChanged }: { revision: number;
         setSources(r.sources);
         setWslError(r.wsl_error);
       })
-      .catch((e) => setError(errorText(e)));
+      .catch(setError);
   }, []);
 
   useEffect(load, [load, revision]);
@@ -27,7 +36,7 @@ export default function SourcesView({ revision, onChanged }: { revision: number;
       load();
       onChanged();
     } catch (e) {
-      setError(errorText(e));
+      setError(e);
     }
   }
 
@@ -41,22 +50,22 @@ export default function SourcesView({ revision, onChanged }: { revision: number;
     if (s.environment_type === "custom" && s.root_path) return run(() => api.removeExtraRoot(s.root_path!));
   }
 
+  function label(s: SourceView): string {
+    if (s.environment_type === "windows") return t("source.windowsLabel");
+    if (s.environment_type === "wsl") return t("source.wslLabel", { distro: s.distro_name ?? "" });
+    return t("source.customLabel", { path: s.root_path ?? "" });
+  }
+
   return (
     <div className="page">
-      <h2>ソース管理</h2>
-      <p className="muted">
-        履歴ファイルは読み取り専用で扱い、変更・削除はしません。変更があった後は右上の「再スキャン」でインデックスを更新します。
-      </p>
-      {error && <div className="error">{error}</div>}
-      {wslError && <div className="muted">WSL: {wslError}</div>}
+      <h2>{t("sources.title")}</h2>
+      <p className="muted">{t("sources.intro")}</p>
+      {error != null && <div className="error">{te(error)}</div>}
+      {wslError && <div className="muted">{t("sources.wslError", { error: te(wslError) })}</div>}
 
       {pendingWsl && (
         <div className="confirm">
-          <p>
-            WSL ディストリビューション <b>{pendingWsl}</b> の既定ユーザーのホームにある
-            <code> ~/.claude/projects </code>を読み取ります。
-            停止中の場合はディストリビューションが起動します。許可しますか？
-          </p>
+          <p>{t("sources.confirmWsl", { distro: pendingWsl })}</p>
           <div className="actions">
             <button
               className="primary"
@@ -66,9 +75,9 @@ export default function SourcesView({ revision, onChanged }: { revision: number;
                 run(() => api.setWslEnabled(d, true));
               }}
             >
-              許可する
+              {t("sources.allow")}
             </button>
-            <button onClick={() => setPendingWsl(null)}>キャンセル</button>
+            <button onClick={() => setPendingWsl(null)}>{t("session.cancel")}</button>
           </div>
         </div>
       )}
@@ -76,33 +85,38 @@ export default function SourcesView({ revision, onChanged }: { revision: number;
       <table className="sources">
         <thead>
           <tr>
-            <th>ソース</th>
-            <th>保存先</th>
-            <th>状態</th>
-            <th>セッション</th>
-            <th>最終スキャン</th>
+            <th>{t("sources.col.source")}</th>
+            <th>{t("sources.col.location")}</th>
+            <th>{t("sources.col.status")}</th>
+            <th>{t("sources.col.sessions")}</th>
+            <th>{t("sources.col.lastScan")}</th>
             <th></th>
           </tr>
         </thead>
         <tbody>
           {sources.map((s) => (
             <tr key={s.key} className={s.enabled ? "" : "disabled"}>
-              <td>{s.label}</td>
-              <td className="mono small">{s.root_path ?? (s.enabled ? "次回スキャン時に確認" : "—")}</td>
+              <td>{label(s)}</td>
+              <td className="mono small">{s.root_path ?? (s.enabled ? t("sources.checkOnScan") : "—")}</td>
               <td>
                 {!s.enabled ? (
-                  <span className="muted">無効</span>
+                  <span className="muted">{t("sources.disabled")}</span>
                 ) : s.status ? (
-                  <span className={`status status-${s.status.status.split(":")[0]}`}>{statusLabel(s.status.status)}</span>
+                  <span className={`status status-${s.status.status}`}>
+                    {STATUS_KEYS[s.status.status] ? t(STATUS_KEYS[s.status.status]) : s.status.status}
+                  </span>
                 ) : (
-                  <span className="muted">未スキャン</span>
+                  <span className="muted">{t("sources.notScanned")}</span>
                 )}
                 {s.status && s.status.error_count > 0 && (
                   <details className="errors">
-                    <summary>エラー {s.status.error_count} 件</summary>
+                    <summary>{t("sources.errors", { count: s.status.error_count })}</summary>
                     <ul>
                       {s.status.recent_errors.map((e, i) => (
-                        <li key={i} className="mono small">{e}</li>
+                        <li key={i} className="mono small">
+                          {e.file_path ? `${e.file_path}: ` : ""}
+                          {te(e)}
+                        </li>
                       ))}
                     </ul>
                   </details>
@@ -112,7 +126,11 @@ export default function SourcesView({ revision, onChanged }: { revision: number;
               <td>{formatDate(s.status?.last_scan_at ?? null)}</td>
               <td>
                 <button onClick={() => toggle(s)}>
-                  {s.environment_type === "custom" ? "削除" : s.enabled ? "無効にする" : "有効にする"}
+                  {s.environment_type === "custom"
+                    ? t("sources.remove")
+                    : s.enabled
+                      ? t("sources.disable")
+                      : t("sources.enable")}
                 </button>
               </td>
             </tr>
@@ -120,14 +138,12 @@ export default function SourcesView({ revision, onChanged }: { revision: number;
         </tbody>
       </table>
 
-      <h3>フォルダを追加</h3>
-      <p className="muted small">
-        プロジェクトごとのフォルダに <code>*.jsonl</code> が入った、<code>.claude/projects</code> 形式のフォルダを指定します（バックアップなど）。
-      </p>
+      <h3>{t("sources.addFolder")}</h3>
+      <p className="muted small">{t("sources.addFolderHint")}</p>
       <div className="inline-form">
         <input
           className="mono"
-          placeholder="例: D:\backup\claude\projects"
+          placeholder="D:\backup\claude\projects"
           value={newRoot}
           onChange={(e) => setNewRoot(e.target.value)}
         />
@@ -140,16 +156,9 @@ export default function SourcesView({ revision, onChanged }: { revision: number;
             })
           }
         >
-          追加
+          {t("sources.add")}
         </button>
       </div>
     </div>
   );
-}
-
-function statusLabel(status: string): string {
-  if (status === "ok") return "正常";
-  if (status === "not_found") return "履歴フォルダなし";
-  if (status === "pending") return "未スキャン";
-  return status.startsWith("error") ? "エラー" : status;
 }

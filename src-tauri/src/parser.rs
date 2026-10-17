@@ -34,6 +34,7 @@ pub struct ParsedSession {
 
 impl ParsedSession {
     /// Display title: user-set title, then the agent's generated title, then the first prompt.
+    /// Empty when none exists; the UI shows a localized "untitled" label.
     pub fn title(&self) -> String {
         if let Some(t) = self.custom_title.as_deref().or(self.ai_title.as_deref()) {
             if !t.trim().is_empty() {
@@ -45,7 +46,7 @@ impl ParsedSession {
             .find(|m| m.role == "user")
             .map(|m| label_from(&m.text))
             .filter(|l| !l.is_empty())
-            .unwrap_or_else(|| "(無題のセッション)".to_string())
+            .unwrap_or_default()
     }
 }
 
@@ -215,6 +216,6 @@ this line is broken
     fn empty_input_is_untitled() {
         let s = parse_reader(&b""[..]);
         assert!(s.messages.is_empty());
-        assert_eq!(s.title(), "(無題のセッション)");
+        assert_eq!(s.title(), "");
     }
 }

@@ -4,6 +4,7 @@
 //! profile, and a WSL root is resolved by asking the distribution for its `$HOME` — which starts
 //! the distribution, so it only happens for distributions the user has explicitly enabled.
 
+use crate::error::AppError;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -99,13 +100,13 @@ fn decode_wsl_output(bytes: &[u8]) -> String {
 }
 
 /// Lists installed distributions without starting any of them.
-pub fn list_wsl_distros() -> Result<Vec<String>, String> {
+pub fn list_wsl_distros() -> Result<Vec<String>, AppError> {
     let out = wsl_command()
         .args(["--list", "--quiet"])
         .output()
-        .map_err(|e| format!("wsl.exe を実行できません: {e}"))?;
+        .map_err(|e| AppError::with("wsl_unavailable", e))?;
     if !out.status.success() {
-        return Err("WSL のディストリビューション一覧を取得できませんでした".into());
+        return Err(AppError::new("wsl_list_failed"));
     }
     Ok(decode_wsl_output(&out.stdout)
         .lines()
@@ -115,17 +116,17 @@ pub fn list_wsl_distros() -> Result<Vec<String>, String> {
 }
 
 /// Resolves the default user's home inside `distro` (starts the distribution).
-pub fn resolve_wsl_root(distro: &str) -> Result<SourceRoot, String> {
+pub fn resolve_wsl_root(distro: &str) -> Result<SourceRoot, AppError> {
     if !is_valid_distro_name(distro) {
-        return Err("不正なディストリビューション名です".into());
+        return Err(AppError::new("invalid_distro"));
     }
     let out = wsl_command()
         .args(["-d", distro, "--", "sh", "-c", "printf %s \"$HOME\""])
         .output()
-        .map_err(|e| format!("wsl.exe を実行できません: {e}"))?;
+        .map_err(|e| AppError::with("wsl_unavailable", e))?;
     let home = decode_wsl_output(&out.stdout).trim().to_string();
     if !out.status.success() || !home.starts_with('/') {
-        return Err(format!("{distro} のホームディレクトリを取得できませんでした"));
+        return Err(AppError::with("wsl_home_failed", distro));
     }
     let mut root = PathBuf::from(format!(r"\\wsl.localhost\{distro}"));
     for part in home.split('/').filter(|p| !p.is_empty()) {

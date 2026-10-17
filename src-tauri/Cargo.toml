@@ -2,7 +2,7 @@
 name = "tsuzukikara"
 version = "0.1.0"
 description = "Local-first search for past AI coding agent sessions"
-authors = ["Tsuzukikara contributors"]
+authors = ["OKADA, Tomoyuki"]
 license = "MIT"
 edition = "2024"
 

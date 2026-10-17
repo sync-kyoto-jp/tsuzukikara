@@ -1,12 +1,19 @@
-import { useEffect, useState } from "react";
-import { api, AppInfo, errorText, Settings } from "../api";
+import { useCallback, useEffect, useState } from "react";
+import { api, AppInfo, Settings, TagUsage } from "../api";
+import { ColorPicker, TagChip } from "../components/Tags";
+import { useI18n } from "../i18n";
+import { LOCALES } from "../i18n/locales";
+
+type Message = "excludesSaved" | "indexDeleted" | { error: unknown };
 
 export default function SettingsView({ onChanged }: { onChanged: () => void }) {
+  const { t, te, preference, setPreference } = useI18n();
   const [settings, setSettings] = useState<Settings | null>(null);
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [excludes, setExcludes] = useState("");
-  const [message, setMessage] = useState<string | null>(null);
+  const [message, setMessage] = useState<Message | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const showError = useCallback((e: unknown) => setMessage({ error: e }), []);
 
   useEffect(() => {
     api.getSettings().then((s) => {
@@ -21,9 +28,9 @@ export default function SettingsView({ onChanged }: { onChanged: () => void }) {
       const s = await api.setExcludedPaths(excludes.split(/\r?\n/));
       setSettings(s);
       setExcludes(s.excluded_paths.join("\n"));
-      setMessage("除外設定を保存しました。次回の再スキャンで反映されます。");
+      setMessage("excludesSaved");
     } catch (e) {
-      setMessage(errorText(e));
+      showError(e);
     }
   }
 
@@ -31,72 +38,181 @@ export default function SettingsView({ onChanged }: { onChanged: () => void }) {
     setConfirmDelete(false);
     try {
       await api.deleteIndex();
-      setMessage("インデックスを削除しました。履歴ファイル本体は変更していません。");
+      setMessage("indexDeleted");
       onChanged();
     } catch (e) {
-      setMessage(errorText(e));
+      showError(e);
     }
   }
 
   return (
     <div className="page">
-      <h2>設定</h2>
-      {message && <div className="notice">{message}</div>}
+      <h2>{t("settings.title")}</h2>
+      {message && (
+        <div className={typeof message === "string" ? "notice" : "notice error"}>
+          {message === "excludesSaved"
+            ? t("settings.excludesSaved")
+            : message === "indexDeleted"
+              ? t("settings.indexDeleted")
+              : te(message.error)}
+        </div>
+      )}
 
       <section>
-        <h3>プライバシー</h3>
+        <h3>{t("settings.language")}</h3>
+        <select value={preference ?? ""} onChange={(e) => setPreference(e.target.value || null).catch(showError)}>
+          <option value="">{t("settings.languageSystem")}</option>
+          {LOCALES.map((l) => (
+            <option key={l.code} value={l.code}>
+              {l.nativeName}
+            </option>
+          ))}
+        </select>
+      </section>
+
+      <TagManager onChanged={onChanged} onError={showError} />
+
+      <section>
+        <h3>{t("settings.privacy")}</h3>
         <ul className="policy">
-          <li>このアプリは外部へ一切通信しません（テレメトリ・分析・クラウド API なし）。画面からの外部通信も CSP で遮断しています。</li>
-          <li>履歴ファイルは読み取り専用で扱い、変更・削除しません。</li>
-          <li>ツールの実行結果（コマンド出力・ファイル内容など）と思考過程はインデックスに含めません。</li>
-          <li>ただし会話本文には秘密情報が含まれ得るため、インデックスにも複製されます。共有 PC では注意してください。</li>
+          <li>{t("settings.privacy.noNetwork")}</li>
+          <li>{t("settings.privacy.readOnly")}</li>
+          <li>{t("settings.privacy.noToolOutput")}</li>
+          <li>{t("settings.privacy.indexCopies")}</li>
         </ul>
       </section>
 
       <section>
-        <h3>除外するフォルダ・ファイル</h3>
-        <p className="muted small">1 行に 1 パス。指定したフォルダ配下のセッションはインデックスから外れます。</p>
+        <h3>{t("settings.excludes")}</h3>
+        <p className="muted small">{t("settings.excludesHint")}</p>
         <textarea
           className="mono"
           rows={5}
           value={excludes}
           onChange={(e) => setExcludes(e.target.value)}
-          placeholder={"例: C:\\Users\\me\\.claude\\projects\\C--work-secret-client"}
+          placeholder={"C:\\Users\\me\\.claude\\projects\\C--work-secret-client"}
         />
         <div className="actions">
           <button onClick={saveExcludes} disabled={!settings || excludes === settings.excluded_paths.join("\n")}>
-            保存
+            {t("settings.save")}
           </button>
         </div>
       </section>
 
       <section>
-        <h3>データ</h3>
+        <h3>{t("settings.data")}</h3>
         <dl className="meta">
-          <dt>保存先</dt>
+          <dt>{t("settings.dataDir")}</dt>
           <dd className="mono small">{info?.data_dir ?? "—"}</dd>
-          <dt>インデックス</dt>
+          <dt>{t("settings.indexFile")}</dt>
           <dd className="mono small">{info?.db_path ?? "—"}</dd>
         </dl>
         {!confirmDelete ? (
           <button className="danger" onClick={() => setConfirmDelete(true)}>
-            インデックスを削除…
+            {t("settings.deleteIndex")}
           </button>
         ) : (
           <div className="confirm">
-            <p>検索インデックス（会話本文の複製）をすべて削除します。案件タグと設定は残ります。よろしいですか？</p>
+            <p>{t("settings.confirmDeleteIndex")}</p>
             <div className="actions">
-              <button className="danger" onClick={deleteIndex}>削除する</button>
-              <button onClick={() => setConfirmDelete(false)}>キャンセル</button>
+              <button className="danger" onClick={deleteIndex}>{t("settings.delete")}</button>
+              <button onClick={() => setConfirmDelete(false)}>{t("session.cancel")}</button>
             </div>
           </div>
         )}
       </section>
 
       <section>
-        <h3>バージョン情報</h3>
+        <h3>{t("settings.about")}</h3>
         <p>Tsuzukikara {info?.version ?? ""} — MIT License</p>
       </section>
     </div>
+  );
+}
+
+function TagManager({ onChanged, onError }: { onChanged: () => void; onError: (e: unknown) => void }) {
+  const { t } = useI18n();
+  const [tags, setTags] = useState<TagUsage[]>([]);
+  const [editing, setEditing] = useState<{ id: number; name: string; color: string } | null>(null);
+  const [deleting, setDeleting] = useState<TagUsage | null>(null);
+
+  const load = useCallback(() => {
+    api.listTags().then(setTags).catch(onError);
+  }, [onError]);
+
+  useEffect(load, [load]);
+
+  async function save() {
+    if (!editing) return;
+    try {
+      await api.updateTag(editing.id, editing.name, editing.color);
+      setEditing(null);
+      load();
+      onChanged();
+    } catch (e) {
+      onError(e);
+    }
+  }
+
+  async function remove(tag: TagUsage) {
+    setDeleting(null);
+    try {
+      await api.deleteTag(tag.id);
+      load();
+      onChanged();
+    } catch (e) {
+      onError(e);
+    }
+  }
+
+  return (
+    <section>
+      <h3>{t("tags.manage")}</h3>
+      <p className="muted small">{t("tags.manageHint")}</p>
+      {tags.length === 0 && <p className="muted">{t("tags.noTags")}</p>}
+      <ul className="tag-list">
+        {tags.map((tag) => (
+          <li key={tag.id}>
+            {editing?.id === tag.id ? (
+              <div className="tag-edit">
+                <input
+                  value={editing.name}
+                  maxLength={40}
+                  onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+                  onKeyDown={(e) => e.key === "Enter" && save()}
+                />
+                <ColorPicker value={editing.color} onChange={(color) => setEditing({ ...editing, color })} />
+                <div className="actions">
+                  <TagChip tag={{ id: tag.id, name: editing.name || tag.name, color: editing.color }} />
+                  <button className="primary" onClick={save} disabled={!editing.name.trim()}>
+                    {t("settings.save")}
+                  </button>
+                  <button onClick={() => setEditing(null)}>{t("session.cancel")}</button>
+                </div>
+              </div>
+            ) : (
+              <div className="tag-line">
+                <button className="link-button" onClick={() => setEditing({ id: tag.id, name: tag.name, color: tag.color })}>
+                  <TagChip tag={tag} />
+                </button>
+                <span className="muted small">{t("tags.sessions", { count: tag.session_count })}</span>
+                <button className="small-button" onClick={() => setDeleting(tag)}>
+                  {t("tags.delete")}
+                </button>
+              </div>
+            )}
+            {deleting?.id === tag.id && (
+              <div className="confirm">
+                <p>{t("tags.confirmDelete", { name: tag.name, count: tag.session_count })}</p>
+                <div className="actions">
+                  <button className="danger" onClick={() => remove(tag)}>{t("tags.delete")}</button>
+                  <button onClick={() => setDeleting(null)}>{t("session.cancel")}</button>
+                </div>
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

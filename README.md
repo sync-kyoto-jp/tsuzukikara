@@ -2,45 +2,38 @@
 
 > Like the "つづきから" (Continue) screen in Japanese RPGs — find any AI coding session and pick it up right where you left off.
 
-**Tsuzukikara** は、AI 開発エージェント（現在は Claude Code）の過去セッションを、キーワード・環境・案件・期間で横断検索し、内容を確認して元の環境で再開するためのローカルファーストなデスクトップアプリです。
+**Tsuzukikara** is a local-first desktop app for searching past AI coding agent sessions (currently Claude Code), reading them, and resuming them in their original environment. It works across native Windows and WSL2.
 
-- **外部通信なし** — テレメトリ・分析 SDK・クラウド API を含みません。WebView も CSP で外部接続を遮断しています。
-- **原本は読み取り専用** — `~/.claude/projects` の履歴ファイルを変更・削除しません。
-- **Windows ネイティブ + WSL2** — WSL の履歴はユーザーが許可したディストリビューションだけを読み取ります。
+- **No network access** — no telemetry, analytics or cloud APIs. The UI's Content Security Policy blocks outbound connections.
+- **Read-only** — history files under `~/.claude/projects` are never modified or deleted.
+- **Opt-in WSL** — a WSL distribution is read only after you allow it.
 
-要件は [ai_session_finder_requirements.md](ai_session_finder_requirements.md) を参照してください。
+## Features
 
-## 機能（MVP）
+- **Source discovery** — finds Claude Code history on Windows (`%USERPROFILE%\.claude\projects`, or `CLAUDE_CONFIG_DIR`) and in WSL distributions you enable. Extra folders in the same layout, such as backups, can be added.
+- **Incremental indexing** — imports history into a local SQLite database. Only files whose size or modification time changed are re-read on rescan. Unreadable lines are skipped and reported per file.
+- **Full-text search** — searches conversation text, session titles, project paths, tag names and your own session names. Space-separated terms must all match within a session. Japanese and other non-space-delimited text is matched by substring.
+- **Filters** — by environment (Windows / each WSL distribution / extra folders), project, one or more tags, and last-updated period.
+- **Result list** — title (or the first prompt when untitled), tags, environment, project, branch, last updated time, number of hits, and a highlighted excerpt. Sessions present in more than one file are marked as duplicates.
+- **Conversation preview** — the full conversation in order, with search terms highlighted. Strings that look like API keys, tokens or private keys are masked by default.
+- **Resume** — opens a new terminal running `claude --resume <session-id>` in the session's working directory, after checking that the directory exists and that the `claude` CLI can start there, and after you confirm the command. Works for Windows and WSL sessions, including CLIs installed through Node version managers such as nodenv.
+- **Session names** — rename a session for display in this app. The name is stored only in the app; Claude Code's history is not changed. The original title can be restored at any time.
+- **Tags** — attach any number of colored tags to a session. Tags appear as colored pills in the list and in the detail view, can be created from a preset palette or a custom color, and can be renamed, recolored or deleted in Settings.
+- **Languages** — English, Japanese, French, Spanish and Korean, switchable in Settings. The default follows the system language.
+- **Settings** — exclude folders or files from the index, delete the index, and review the privacy policy. Tags and session names are kept when the index is deleted.
 
-| 要件 | 内容 |
-|---|---|
-| FR-01 | Windows（`%USERPROFILE%\.claude\projects` / `CLAUDE_CONFIG_DIR`）と、許可した WSL ディストリビューションの `~/.claude/projects` を検出 |
-| FR-02 | 読み取り専用で取り込み、SQLite にインデックス化。同じセッション ID の別ファイルは「重複」と表示 |
-| FR-03 | 会話本文・タイトル・プロジェクトパスの全文検索（FTS5 trigram、日本語の部分一致に対応） |
-| FR-04 | 環境・案件タグ・プロジェクト・更新日時（期間）で絞り込み |
-| FR-05 | タイトル（なければ最初の発言から推定）、更新日時、環境、ヒット箇所の抜粋 |
-| FR-06 | 会話の時系列プレビュー。秘密情報らしき文字列は既定で伏せ字 |
-| FR-07 | `claude --resume <id>` による再開。CLI と作業ディレクトリを確認し、実行前に確認ダイアログ |
-| FR-08 | 再スキャン。サイズ・更新日時が変わったファイルだけ再取り込み |
-| FR-09 | 追加フォルダ・除外パス・インデックス削除・プライバシー方針の表示 |
-| FR-10 | プロジェクト単位の案件タグ（インデックス削除後も保持） |
+### What is not indexed
 
-### インデックスに含めないもの
+Tool results (command output, file contents read by the agent) and thinking blocks are not imported. They are the most likely place for secrets and make up most of the history size. Tool calls are kept as their tool name only, such as `[tool: Read]`.
 
-ツールの実行結果（コマンド出力・読み込んだファイル内容など）と thinking ブロックは取り込みません。秘密情報が最も混入しやすく、容量の大半を占めるためです。ツール呼び出しは `[tool: Read]` のようにツール名だけ残します。
+## Development
 
-### 日本語検索
-
-FTS5 の `trigram` トークナイザで部分一致検索しています。3 文字以上の語は FTS、1〜2 文字の語は `LIKE` による全件走査にフォールバックします。スペース区切りの複数語は、同じセッション内にすべて含まれるもの（AND）を返します。
-
-## 開発
-
-前提:
+Requirements:
 
 - Node.js 20+
-- Rust（stable, MSVC ツールチェーン）
-- Visual Studio Build Tools（C++ によるデスクトップ開発）
-- WebView2（Windows 11 は標準搭載）
+- Rust (stable, MSVC toolchain)
+- Visual Studio Build Tools with "Desktop development with C++"
+- WebView2 (preinstalled on Windows 11)
 
 ```bash
 npm install
@@ -50,42 +43,52 @@ npm install
 npm run tauri dev
 ```
 
-テスト（ダミーデータのみを使用します）:
+Tests (dummy data only):
 
 ```bash
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-配布パッケージ（MSI / NSIS）:
+Installers (MSI / NSIS):
 
 ```bash
 npm run tauri build
 ```
 
-### 構成
+### Project layout
 
 ```
 src-tauri/src/
-  parser.rs    Claude Code JSONL パーサー（寛容・読み取り専用）
-  sources.rs   Windows / WSL の履歴ソース検出
-  indexer.rs   差分スキャンと取り込み
-  db.rs        SQLite スキーマ・FTS5 検索・参照クエリ
-  resume.rs    セッション再開（入力検証と起動）
-  settings.rs  設定（アプリデータディレクトリの JSON）
-  lib.rs       Tauri コマンド
+  parser.rs    Lenient, read-only parser for Claude Code JSONL transcripts
+  sources.rs   Windows / WSL history discovery
+  indexer.rs   Incremental scan and import
+  db.rs        SQLite schema, FTS5 search, tags and session names
+  resume.rs    Resume command validation and launch
+  settings.rs  Settings (JSON in the app data folder)
+  error.rs     Error codes translated by the UI
+  lib.rs       Tauri commands
 src/
-  views/       検索・セッション詳細・ソース管理・設定の各画面
+  i18n/        Translation framework and locale dictionaries
+  components/  Shared UI (tags, highlighting)
+  views/       Search, session detail, sources and settings screens
 ```
 
-データはアプリデータディレクトリ（`%APPDATA%\jp.kyoto.sync.tsuzukikara\`）の `index.sqlite` と `settings.json` に保存されます。
+Data is stored in the app data folder (`%APPDATA%\jp.kyoto.sync.tsuzukikara\`) as `index.sqlite` and `settings.json`.
 
-## 既知の制約
+### Adding a language
 
-- 履歴の JSONL 形式は公開仕様ではなく、Claude Code のバージョンアップで変わることがあります。パーサーは未知のレコードを無視し、壊れた行は数えて報告します。
-- WSL の読み取りは `\\wsl.localhost\<distro>\...` 経由です。ディストリビューションが停止中だと起動します。
-- 再開コマンドは Windows では PowerShell の新しいウィンドウ、WSL では `wsl.exe -d <distro> --cd <path> -- bash -lic "claude --resume <id>"` で起動します。
-- Claude Desktop（チャット）、Codex、macOS / Linux は未対応です（要件の Phase 2〜3）。
+1. Copy `src/i18n/locales/en.ts` to `src/i18n/locales/<code>.ts` and translate every value. TypeScript reports missing or unknown keys.
+2. Import the file in `src/i18n/locales.ts` and add one entry to `LOCALES`.
 
-## ライセンス
+The backend never returns display text: errors are sent as codes and translated through the `error.*` keys.
 
-[MIT License](LICENSE)
+## Known limitations
+
+- Claude Code's JSONL format is not a public specification and may change between versions. Unknown record types are ignored.
+- WSL history is read through `\\wsl.localhost\<distro>\...`; a stopped distribution is started when it is scanned.
+- Search terms of one or two characters fall back to a slower scan; longer terms use the FTS5 trigram index.
+- Claude Desktop chat history, Codex, macOS and Linux are not supported yet.
+
+## License
+
+[MIT](LICENSE)

@@ -1,5 +1,6 @@
 //! User settings, stored as JSON in the app's data directory (never synced or uploaded).
 
+use crate::error::AppError;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -14,6 +15,8 @@ pub struct Settings {
     pub extra_roots: Vec<String>,
     /// Folders or files whose sessions are never indexed.
     pub excluded_paths: Vec<String>,
+    /// UI language code (e.g. `ja`, `en`). `None` follows the OS language.
+    pub language: Option<String>,
 }
 
 impl Default for Settings {
@@ -23,6 +26,7 @@ impl Default for Settings {
             enabled_wsl_distros: Vec::new(),
             extra_roots: Vec::new(),
             excluded_paths: Vec::new(),
+            language: None,
         }
     }
 }
@@ -35,11 +39,15 @@ impl Settings {
             .unwrap_or_default()
     }
 
-    pub fn save(&self, path: &Path) -> Result<(), String> {
-        let json = serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?;
+    pub fn save(&self, path: &Path) -> Result<(), AppError> {
+        let json = serde_json::to_vec_pretty(self).map_err(AppError::internal)?;
         let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, json).map_err(|e| format!("設定を保存できません: {e}"))?;
-        std::fs::rename(&tmp, path).map_err(|e| format!("設定を保存できません: {e}"))
+        std::fs::write(&tmp, json).map_err(|e| AppError::with("settings_save_failed", e))?;
+        std::fs::rename(&tmp, path).map_err(|e| AppError::with("settings_save_failed", e))
+    }
+
+    pub fn is_valid_language(code: &str) -> bool {
+        (2..=10).contains(&code.len()) && code.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
     }
 }
 

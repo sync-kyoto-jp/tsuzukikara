@@ -5,6 +5,7 @@
 //! line is validated first; the UI asks for confirmation before `launch` is called.
 
 use crate::db::SessionDetail;
+use crate::error::AppError;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -17,8 +18,8 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 #[derive(Debug, Serialize)]
 pub struct ResumePlan {
     pub available: bool,
-    /// Why resume is unavailable, in user-facing Japanese.
-    pub reason: Option<String>,
+    /// Why resume is unavailable (translated by the UI).
+    pub reason: Option<AppError>,
     /// What will run, shown in the confirmation dialog.
     pub command_display: String,
     pub working_dir: Option<String>,
@@ -46,16 +47,16 @@ fn is_safe_path(p: &str) -> bool {
     !p.is_empty() && !p.chars().any(|c| c.is_control() || matches!(c, '"' | '\'' | '`' | '$' | '\0'))
 }
 
-fn target_of(d: &SessionDetail) -> Result<Target, String> {
-    let cwd = d.cwd.clone().ok_or("作業ディレクトリが履歴に記録されていません")?;
+fn target_of(d: &SessionDetail) -> Result<Target, AppError> {
+    let cwd = d.cwd.clone().ok_or_else(|| AppError::new("resume_no_cwd"))?;
     if !is_safe_path(&cwd) {
-        return Err("作業ディレクトリに再開コマンドで扱えない文字が含まれています".into());
+        return Err(AppError::with("resume_unsafe_cwd", &cwd));
     }
     match d.environment_type.as_str() {
         "wsl" => {
-            let distro = d.distro_name.clone().ok_or("ディストリビューションが不明です")?;
+            let distro = d.distro_name.clone().ok_or_else(|| AppError::new("invalid_distro"))?;
             if !crate::sources::is_valid_distro_name(&distro) {
-                return Err("不正なディストリビューション名です".into());
+                return Err(AppError::new("invalid_distro"));
             }
             Ok(Target::Wsl { distro, cwd })
         }
@@ -124,14 +125,14 @@ fn wsl_resume_script(cli: &str, id: &str) -> String {
 }
 
 pub fn plan(d: &SessionDetail) -> ResumePlan {
-    let unavailable = |reason: String, display: String, cwd: Option<String>| ResumePlan {
+    let unavailable = |reason: AppError, display: String, cwd: Option<String>| ResumePlan {
         available: false,
         reason: Some(reason),
         command_display: display,
         working_dir: cwd,
     };
     let Some(id) = d.external_session_id.clone().filter(|i| is_valid_session_id(i)) else {
-        return unavailable("セッションIDが不明または不正です".into(), String::new(), d.cwd.clone());
+        return unavailable(AppError::new("resume_invalid_session_id"), String::new(), d.cwd.clone());
     };
     let display = format!("claude --resume {id}");
     let target = match target_of(d) {
@@ -141,28 +142,24 @@ pub fn plan(d: &SessionDetail) -> ResumePlan {
     match target {
         Target::Windows { cwd } => {
             if !Path::new(&cwd).is_dir() {
-                return unavailable(format!("作業ディレクトリが見つかりません: {cwd}"), display, Some(cwd));
+                return unavailable(AppError::with("resume_cwd_not_found", &cwd), display, Some(cwd));
             }
             if !windows_cli_found() {
-                return unavailable("Windows 側で claude コマンドが見つかりません".into(), display, Some(cwd));
+                return unavailable(AppError::new("resume_cli_not_found_windows"), display, Some(cwd));
             }
             ResumePlan { available: true, reason: None, command_display: display, working_dir: Some(cwd) }
         }
         Target::Wsl { distro, cwd } => {
             let base = format!("wsl.exe -d {distro} --cd {cwd} -- {display}");
             if !wsl_unc(&distro, &cwd).is_dir() {
-                return unavailable(format!("{distro} 内に作業ディレクトリが見つかりません: {cwd}"), base, Some(cwd));
+                return unavailable(AppError::with("resume_cwd_not_found", format!("{distro}: {cwd}")), base, Some(cwd));
             }
             let Some(cli) = wsl_cli_path(&distro) else {
-                return unavailable(format!("{distro} 内で claude コマンドが見つかりません"), base, Some(cwd));
+                return unavailable(AppError::with("resume_cli_not_found_wsl", &distro), base, Some(cwd));
             };
             let display = format!("wsl.exe -d {distro} --cd {cwd} -- {cli} --resume {id}");
             if !wsl_cli_runs_in(&distro, &cwd, &cli) {
-                return unavailable(
-                    format!("{distro} の作業ディレクトリで claude を起動できません ({cli})"),
-                    display,
-                    Some(cwd),
-                );
+                return unavailable(AppError::with("resume_cli_failed", &cli), display, Some(cwd));
             }
             ResumePlan { available: true, reason: None, command_display: display, working_dir: Some(cwd) }
         }
@@ -174,10 +171,10 @@ fn ps_quote(s: &str) -> String {
 }
 
 /// Opens a new console window running `claude --resume`. Re-validates everything `plan` checked.
-pub fn launch(d: &SessionDetail) -> Result<(), String> {
+pub fn launch(d: &SessionDetail) -> Result<(), AppError> {
     let p = plan(d);
     if !p.available {
-        return Err(p.reason.unwrap_or_else(|| "再開できません".into()));
+        return Err(p.reason.unwrap_or_else(|| AppError::new("resume_unavailable")));
     }
     let id = d.external_session_id.clone().unwrap_or_default();
     // PowerShell's Start-Process opens a visible window and, unlike cmd.exe, accepts UNC working
@@ -189,7 +186,7 @@ pub fn launch(d: &SessionDetail) -> Result<(), String> {
         ),
         Target::Wsl { distro, cwd } => {
             // Validated by plan(); resolved again here so a stale plan is never trusted.
-            let cli = wsl_cli_path(&distro).ok_or("claude コマンドが見つかりません")?;
+            let cli = wsl_cli_path(&distro).ok_or_else(|| AppError::with("resume_cli_not_found_wsl", &distro))?;
             // `-e` runs bash directly, so the script is not re-parsed by wsl's default shell.
             format!(
                 "Start-Process -FilePath 'wsl.exe' -ArgumentList {}",
@@ -204,7 +201,7 @@ pub fn launch(d: &SessionDetail) -> Result<(), String> {
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .spawn()
         .map(|_| ())
-        .map_err(|e| format!("ターミナルを起動できません: {e}"))
+        .map_err(|e| AppError::with("resume_launch_failed", e))
 }
 
 #[cfg(test)]

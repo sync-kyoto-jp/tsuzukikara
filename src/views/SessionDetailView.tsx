@@ -1,23 +1,31 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, errorText, formatDate, ResumePlan, SessionDetail, sourceLabel } from "../api";
+import { api, ResumePlan, SessionDetail, TagView } from "../api";
 import { HighlightTerms } from "../components/Highlight";
+import { TagChip, TagPicker } from "../components/Tags";
+import { useI18n } from "../i18n";
+import { sourceLabel, titleOrUntitled } from "../labels";
 import { maskSecrets } from "../secrets";
 
 interface Props {
   id: number;
   query: string;
-  onTagChanged: () => void;
+  /** Called after the session's name or tags change, so the list can refresh. */
+  onChanged: () => void;
 }
 
-export default function SessionDetailView({ id, query, onTagChanged }: Props) {
+type Notice = { kind: "resumed" } | { kind: "error"; error: unknown } | { kind: "resumeFailed"; error: unknown };
+
+export default function SessionDetailView({ id, query, onChanged }: Props) {
+  const { t, te, formatDate } = useI18n();
   const [detail, setDetail] = useState<SessionDetail | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<unknown>(null);
   const [reveal, setReveal] = useState(false);
   const [plan, setPlan] = useState<ResumePlan | null>(null);
   const [checking, setChecking] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [tagDraft, setTagDraft] = useState("");
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
 
   useEffect(() => {
     setDetail(null);
@@ -25,28 +33,29 @@ export default function SessionDetailView({ id, query, onTagChanged }: Props) {
     setConfirming(false);
     setNotice(null);
     setReveal(false);
+    setEditingTitle(false);
     api
       .getSession(id)
       .then((d) => {
         setDetail(d);
-        setTagDraft(d.client_tag ?? "");
-        setError(null);
+        setLoadError(null);
       })
-      .catch((e) => setError(errorText(e)));
+      .catch(setLoadError);
   }, [id]);
 
   const terms = useMemo(() => query.split(/\s+/).filter(Boolean), [query]);
+  const maskLabel = t("session.masked");
   const rendered = useMemo(() => {
     if (!detail) return { messages: [], masked: 0 };
     let masked = 0;
     const messages = detail.messages.map((m) => {
-      if (reveal) return { ...m };
-      const r = maskSecrets(m.text);
+      if (reveal) return m;
+      const r = maskSecrets(m.text, maskLabel);
       masked += r.masked;
       return { ...m, text: r.text };
     });
     return { messages, masked };
-  }, [detail, reveal]);
+  }, [detail, reveal, maskLabel]);
 
   async function checkResume() {
     setChecking(true);
@@ -56,7 +65,7 @@ export default function SessionDetailView({ id, query, onTagChanged }: Props) {
       setPlan(p);
       setConfirming(p.available);
     } catch (e) {
-      setNotice(errorText(e));
+      setNotice({ kind: "error", error: e });
     } finally {
       setChecking(false);
     }
@@ -66,101 +75,166 @@ export default function SessionDetailView({ id, query, onTagChanged }: Props) {
     setConfirming(false);
     try {
       await api.resumeSession(id);
-      setNotice("新しいターミナルでセッションを再開しました");
+      setNotice({ kind: "resumed" });
     } catch (e) {
-      setNotice(`再開できませんでした: ${errorText(e)}`);
+      setNotice({ kind: "resumeFailed", error: e });
     }
   }
 
-  async function saveTag() {
-    if (!detail?.cwd) return;
+  async function saveTitle(title: string | null) {
+    if (!detail) return;
     try {
-      await api.setProjectTag(detail.cwd, tagDraft.trim() || null);
-      setDetail({ ...detail, client_tag: tagDraft.trim() || null });
-      onTagChanged();
+      await api.renameSession(id, title);
+      const trimmed = title?.trim() ?? "";
+      setDetail({ ...detail, title: trimmed || detail.original_title, renamed: trimmed !== "" });
+      setEditingTitle(false);
+      onChanged();
     } catch (e) {
-      setNotice(errorText(e));
+      setNotice({ kind: "error", error: e });
     }
   }
 
-  if (error) return <div className="error">{error}</div>;
-  if (!detail) return <div className="placeholder muted">読み込み中…</div>;
+  async function saveTags(tags: TagView[]) {
+    if (!detail) return;
+    try {
+      await api.setSessionTags(id, tags.map((tag) => tag.id));
+      setDetail({ ...detail, tags: [...tags].sort((a, b) => a.name.localeCompare(b.name)) });
+      onChanged();
+    } catch (e) {
+      setNotice({ kind: "error", error: e });
+    }
+  }
+
+  if (loadError != null) return <div className="error detail">{te(loadError)}</div>;
+  if (!detail) return <div className="placeholder muted">{t("session.loading")}</div>;
+  const canEdit = detail.external_session_id != null;
 
   return (
     <div className="detail">
       <div className="detail-header">
-        <h2>{detail.title}</h2>
+        {editingTitle ? (
+          <div className="title-edit">
+            <input
+              autoFocus
+              value={titleDraft}
+              maxLength={200}
+              onChange={(e) => setTitleDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") saveTitle(titleDraft);
+                if (e.key === "Escape") setEditingTitle(false);
+              }}
+            />
+            <div className="actions">
+              <button className="primary" onClick={() => saveTitle(titleDraft)} disabled={!titleDraft.trim()}>
+                {t("session.save")}
+              </button>
+              <button onClick={() => setEditingTitle(false)}>{t("session.cancel")}</button>
+              {detail.renamed && <button onClick={() => saveTitle(null)}>{t("session.resetTitle")}</button>}
+            </div>
+            <p className="muted small">{t("session.renameHint")}</p>
+          </div>
+        ) : (
+          <div className="title-row">
+            <h2>{titleOrUntitled(t, detail.title)}</h2>
+            {canEdit && (
+              <button
+                className="icon-button"
+                title={t("session.rename")}
+                aria-label={t("session.rename")}
+                onClick={() => {
+                  setTitleDraft(detail.title);
+                  setEditingTitle(true);
+                }}
+              >
+                ✎
+              </button>
+            )}
+          </div>
+        )}
+        {detail.renamed && !editingTitle && (
+          <p className="muted small">
+            {t("session.originalTitle", { title: titleOrUntitled(t, detail.original_title) })}
+          </p>
+        )}
+
+        <div className="tag-row detail-tags">
+          {detail.tags.map((tag) => (
+            <TagChip
+              key={tag.id}
+              tag={tag}
+              onRemove={canEdit ? () => saveTags(detail.tags.filter((x) => x.id !== tag.id)) : undefined}
+            />
+          ))}
+          {canEdit && (
+            <TagPicker assigned={detail.tags} onChange={saveTags} onError={(e) => setNotice({ kind: "error", error: e })} />
+          )}
+        </div>
+
         <dl className="meta">
-          <dt>環境</dt>
-          <dd>{sourceLabel(detail.source_key)}</dd>
-          <dt>プロジェクト</dt>
+          <dt>{t("session.environment")}</dt>
+          <dd>{sourceLabel(t, detail.source_key)}</dd>
+          <dt>{t("session.project")}</dt>
           <dd className="mono">{detail.cwd ?? "—"}</dd>
           {detail.git_branch && (
             <>
-              <dt>ブランチ</dt>
+              <dt>{t("session.branch")}</dt>
               <dd className="mono">{detail.git_branch}</dd>
             </>
           )}
-          <dt>期間</dt>
+          <dt>{t("session.period")}</dt>
           <dd>
             {formatDate(detail.started_at)} 〜 {formatDate(detail.updated_at)}
           </dd>
-          <dt>セッションID</dt>
+          <dt>{t("session.sessionId")}</dt>
           <dd className="mono">{detail.external_session_id ?? "—"}</dd>
-          <dt>保存元</dt>
+          <dt>{t("session.file")}</dt>
           <dd className="mono small">{detail.file_path}</dd>
-          <dt>案件タグ</dt>
-          <dd className="tag-edit">
-            <input
-              value={tagDraft}
-              placeholder="例: 顧客A / 案件X"
-              onChange={(e) => setTagDraft(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && saveTag()}
-              disabled={!detail.cwd}
-            />
-            <button onClick={saveTag} disabled={!detail.cwd || tagDraft === (detail.client_tag ?? "")}>
-              保存
-            </button>
-            <span className="muted small">同じプロジェクトの全セッションに付きます</span>
-          </dd>
         </dl>
+
         <div className="actions">
           <button className="primary" onClick={checkResume} disabled={checking}>
-            {checking ? "確認中…" : "セッションを再開…"}
+            {checking ? t("session.checking") : t("session.resume")}
           </button>
-          {plan && !plan.available && <span className="error inline">再開できません: {plan.reason}</span>}
-          {notice && <span className="muted">{notice}</span>}
+          {plan && !plan.available && plan.reason && (
+            <span className="error inline">{t("session.cannotResume", { reason: te(plan.reason) })}</span>
+          )}
+          {notice?.kind === "resumed" && <span className="muted">{t("session.resumed")}</span>}
+          {notice?.kind === "resumeFailed" && (
+            <span className="error inline">{t("session.resumeFailed", { error: te(notice.error) })}</span>
+          )}
+          {notice?.kind === "error" && <span className="error inline">{te(notice.error)}</span>}
         </div>
         {confirming && plan && (
           <div className="confirm">
-            <p>次のコマンドを新しいターミナルで実行します。よろしいですか？</p>
+            <p>{t("session.confirmResume")}</p>
             <pre className="mono">{plan.command_display}</pre>
-            {plan.working_dir && <p className="muted small">作業ディレクトリ: {plan.working_dir}</p>}
+            {plan.working_dir && <p className="muted small">{t("session.workingDir", { dir: plan.working_dir })}</p>}
+            <p className="muted small">{t("session.firstRunNote")}</p>
             <div className="actions">
               <button className="primary" onClick={runResume}>
-                実行する
+                {t("session.run")}
               </button>
-              <button onClick={() => setConfirming(false)}>キャンセル</button>
+              <button onClick={() => setConfirming(false)}>{t("session.cancel")}</button>
             </div>
           </div>
         )}
         <div className="warning">
-          ⚠ 履歴には API キーやパスワードなどの秘密情報が含まれている可能性があります。画面共有中の閲覧に注意してください。
-          {rendered.masked > 0 && !reveal && <> 秘密情報らしき文字列 {rendered.masked} 件を伏せています。</>}
+          ⚠ {t("session.secretWarning")}
+          {rendered.masked > 0 && !reveal && <> {t("session.maskedCount", { count: rendered.masked })}</>}
           <label className="reveal">
             <input type="checkbox" checked={reveal} onChange={(e) => setReveal(e.target.checked)} />
-            伏せ字を解除
+            {t("session.reveal")}
           </label>
         </div>
         {detail.bad_lines > 0 && (
-          <div className="muted small">解析できなかった {detail.bad_lines} 行はスキップしました。</div>
+          <div className="muted small">{t("session.skippedLines", { count: detail.bad_lines })}</div>
         )}
       </div>
       <ol className="messages">
         {rendered.messages.map((m) => (
           <li key={m.sequence_no} className={`message role-${m.role}`}>
             <div className="message-head">
-              <span className="role">{m.role === "user" ? "ユーザー" : "アシスタント"}</span>
+              <span className="role">{m.role === "user" ? t("session.roleUser") : t("session.roleAssistant")}</span>
               <span className="muted small">{formatDate(m.timestamp)}</span>
             </div>
             <div className="message-body">

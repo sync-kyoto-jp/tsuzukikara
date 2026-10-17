@@ -1,9 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
-import { api, errorText, FilterOptions, formatDate, SearchParams, SearchResult, sourceLabel } from "../api";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { api, FilterOptions, SearchParams, SearchResult } from "../api";
 import Highlight from "../components/Highlight";
+import { TagChip } from "../components/Tags";
+import { useI18n } from "../i18n";
+import { sourceLabel, titleOrUntitled } from "../labels";
 import SessionDetailView from "./SessionDetailView";
 
 type Period = "all" | "7" | "30" | "90" | "365" | "custom";
+const PERIODS: Period[] = ["all", "7", "30", "90", "365", "custom"];
 
 function periodRange(period: Period, from: string, to: string): Pick<SearchParams, "updated_from" | "updated_to"> {
   if (period === "all") return {};
@@ -17,40 +21,47 @@ function periodRange(period: Period, from: string, to: string): Pick<SearchParam
 }
 
 export default function SearchView({ revision, onRescan }: { revision: number; onRescan: () => void }) {
+  const { t, te, formatDate } = useI18n();
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
   const [sourceKey, setSourceKey] = useState("");
   const [projectId, setProjectId] = useState("");
-  const [clientTag, setClientTag] = useState("");
+  const [tagIds, setTagIds] = useState<number[]>([]);
   const [period, setPeriod] = useState<Period>("all");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [options, setOptions] = useState<FilterOptions | null>(null);
   const [result, setResult] = useState<SearchResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
-  const [tagRevision, setTagRevision] = useState(0);
+  // Bumped when a session's tags or name change in the detail pane.
+  const [localRevision, setLocalRevision] = useState(0);
 
   useEffect(() => {
-    const t = setTimeout(() => setDebounced(query), 250);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setDebounced(query), 250);
+    return () => clearTimeout(timer);
   }, [query]);
 
   useEffect(() => {
-    api.filterOptions().then(setOptions).catch((e) => setError(errorText(e)));
-  }, [revision, tagRevision]);
+    api.filterOptions().then(setOptions).catch(setError);
+  }, [revision, localRevision]);
+
+  // Drop filters on tags that were deleted.
+  useEffect(() => {
+    if (options) setTagIds((ids) => ids.filter((id) => options.tags.some((tag) => tag.id === id)));
+  }, [options]);
 
   const params: SearchParams = useMemo(
     () => ({
       query: debounced,
       source_keys: sourceKey ? [sourceKey] : [],
       project_id: projectId ? Number(projectId) : null,
-      client_tag: clientTag || null,
+      tag_ids: tagIds,
       ...periodRange(period, from, to),
       limit: 300,
     }),
-    [debounced, sourceKey, projectId, clientTag, period, from, to],
+    [debounced, sourceKey, projectId, tagIds, period, from, to],
   );
 
   useEffect(() => {
@@ -64,18 +75,21 @@ export default function SearchView({ revision, onRescan }: { revision: number; o
           setError(null);
         }
       })
-      .catch((e) => !cancelled && setError(errorText(e)))
+      .catch((e) => !cancelled && setError(e))
       .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;
     };
-  }, [params, revision, tagRevision]);
+  }, [params, revision, localRevision]);
 
   const projects = useMemo(
     () => (options?.projects ?? []).filter((p) => !sourceKey || p.source_key === sourceKey),
     [options, sourceKey],
   );
+  const selectedTags = (options?.tags ?? []).filter((tag) => tagIds.includes(tag.id));
+  const unselectedTags = (options?.tags ?? []).filter((tag) => !tagIds.includes(tag.id));
   const empty = options && options.source_keys.length === 0;
+  const onSessionChanged = useCallback(() => setLocalRevision((r) => r + 1), []);
 
   return (
     <div className="search-layout">
@@ -84,39 +98,30 @@ export default function SearchView({ revision, onRescan }: { revision: number; o
           <input
             autoFocus
             type="search"
-            placeholder="キーワードで検索（スペース区切りで AND）"
+            placeholder={t("search.placeholder")}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
         </div>
         <div className="filters">
           <select value={sourceKey} onChange={(e) => { setSourceKey(e.target.value); setProjectId(""); }}>
-            <option value="">すべての環境</option>
+            <option value="">{t("search.allEnvironments")}</option>
             {options?.source_keys.map((k) => (
-              <option key={k} value={k}>{sourceLabel(k)}</option>
-            ))}
-          </select>
-          <select value={clientTag} onChange={(e) => setClientTag(e.target.value)}>
-            <option value="">すべての案件タグ</option>
-            {options?.client_tags.map((t) => (
-              <option key={t} value={t}>{t}</option>
+              <option key={k} value={k}>{sourceLabel(t, k)}</option>
             ))}
           </select>
           <select value={projectId} onChange={(e) => setProjectId(e.target.value)} className="project-select">
-            <option value="">すべてのプロジェクト</option>
+            <option value="">{t("search.allProjects")}</option>
             {projects.map((p) => (
               <option key={p.id} value={p.id} title={p.project_path}>
-                {p.display_name}{p.client_tag ? ` [${p.client_tag}]` : ""} ({p.session_count})
+                {p.display_name} ({p.session_count})
               </option>
             ))}
           </select>
           <select value={period} onChange={(e) => setPeriod(e.target.value as Period)}>
-            <option value="all">全期間</option>
-            <option value="7">7日以内</option>
-            <option value="30">30日以内</option>
-            <option value="90">90日以内</option>
-            <option value="365">1年以内</option>
-            <option value="custom">期間を指定</option>
+            {PERIODS.map((p) => (
+              <option key={p} value={p}>{t(`search.period.${p}` as const)}</option>
+            ))}
           </select>
           {period === "custom" && (
             <span className="date-range">
@@ -125,16 +130,42 @@ export default function SearchView({ revision, onRescan }: { revision: number; o
               <input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
             </span>
           )}
+          {unselectedTags.length > 0 && (
+            <select
+              value=""
+              onChange={(e) => e.target.value && setTagIds((ids) => [...ids, Number(e.target.value)])}
+            >
+              <option value="">{t("search.addTagFilter")}</option>
+              {unselectedTags.map((tag) => (
+                <option key={tag.id} value={tag.id}>
+                  {tag.name} ({tag.session_count})
+                </option>
+              ))}
+            </select>
+          )}
         </div>
+        {selectedTags.length > 0 && (
+          <div className="tag-row filter-tags">
+            {selectedTags.map((tag) => (
+              <TagChip key={tag.id} tag={tag} onRemove={() => setTagIds((ids) => ids.filter((i) => i !== tag.id))} />
+            ))}
+          </div>
+        )}
         <div className="result-meta muted">
-          {loading ? "検索中…" : result ? `${result.total} 件${result.total > result.hits.length ? `（上位 ${result.hits.length} 件を表示）` : ""}` : ""}
+          {loading
+            ? t("search.searching")
+            : result
+              ? result.total > result.hits.length
+                ? t("search.countLimited", { total: result.total, shown: result.hits.length })
+                : t("search.count", { total: result.total })
+              : ""}
         </div>
-        {error && <div className="error">{error}</div>}
+        {error != null && <div className="error">{te(error)}</div>}
         {empty && (
           <div className="empty">
-            <p>まだインデックスがありません。</p>
-            <button className="primary" onClick={onRescan}>履歴をスキャン</button>
-            <p className="muted">WSL の履歴を含めるには「ソース管理」でディストリビューションを有効にしてください。</p>
+            <p>{t("search.emptyIndex")}</p>
+            <button className="primary" onClick={onRescan}>{t("search.scanNow")}</button>
+            <p className="muted">{t("search.wslHint")}</p>
           </div>
         )}
         <ul className="results">
@@ -144,15 +175,25 @@ export default function SearchView({ revision, onRescan }: { revision: number; o
               className={selected === h.session_id ? "selected" : ""}
               onClick={() => setSelected(h.session_id)}
             >
-              <div className="result-title">{h.title}</div>
+              <div className="result-title">
+                <span className={h.title ? "" : "muted"}>{titleOrUntitled(t, h.title)}</span>
+              </div>
+              {h.tags.length > 0 && (
+                <div className="tag-row">
+                  {h.tags.map((tag) => <TagChip key={tag.id} tag={tag} small />)}
+                </div>
+              )}
               <div className="result-sub">
-                <span className={`badge env-${h.environment_type}`}>{sourceLabel(h.source_key)}</span>
-                {h.client_tag && <span className="badge tag">{h.client_tag}</span>}
+                <span className={`badge env-${h.environment_type}`}>{sourceLabel(t, h.source_key)}</span>
                 <span title={h.project_path ?? ""}>{h.project_name ?? "—"}</span>
                 {h.git_branch && <span className="muted">⎇ {h.git_branch}</span>}
                 <span className="muted">{formatDate(h.updated_at)}</span>
-                {h.hit_count > 0 && <span className="muted">{h.hit_count} 件ヒット</span>}
-                {h.duplicates > 0 && <span className="badge warn" title="同じセッションIDの別ファイルがあります">重複 {h.duplicates}</span>}
+                {h.hit_count > 0 && <span className="muted">{t("search.hits", { count: h.hit_count })}</span>}
+                {h.duplicates > 0 && (
+                  <span className="badge warn" title={t("search.duplicatesTitle")}>
+                    {t("search.duplicates", { count: h.duplicates })}
+                  </span>
+                )}
               </div>
               {h.snippet && (
                 <div className="snippet">
@@ -165,13 +206,9 @@ export default function SearchView({ revision, onRescan }: { revision: number; o
       </section>
       <section className="detail-pane">
         {selected != null ? (
-          <SessionDetailView
-            id={selected}
-            query={debounced}
-            onTagChanged={() => setTagRevision((r) => r + 1)}
-          />
+          <SessionDetailView id={selected} query={debounced} onChanged={onSessionChanged} />
         ) : (
-          <div className="placeholder muted">左の一覧からセッションを選択してください</div>
+          <div className="placeholder muted">{t("search.selectSession")}</div>
         )}
       </section>
     </div>
