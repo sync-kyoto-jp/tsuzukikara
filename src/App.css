@@ -249,10 +249,13 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; padding: 0 1
 .title-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
 .title-row h2 { margin: 0; }
 .icon-button { border: none; background: transparent; font-size: 16px; padding: 2px 6px; color: var(--muted); }
-.title-edit input { width: 100%; font-size: 16px; font-weight: 600; }
+.title-edit > input { width: 100%; font-size: 16px; font-weight: 600; }
 .detail-header > p.muted.small { margin: 0 0 8px; }
 .notice.error { background: transparent; border: 1px solid var(--danger); }
-.checkbox-line { display: flex; align-items: center; gap: 6px; margin: 6px 0; font-weight: 600; }
+.checkbox-line { display: inline-flex; align-items: center; gap: 6px; margin: 6px 0; font-weight: 600; cursor: pointer; }
+/* Width rules for text fields must never stretch checkboxes. */
+input[type="checkbox"] { width: auto; margin: 0; padding: 0; flex: none; }
 .tag-editor input { width: 100%; max-width: 280px; }
 .tag-editor .muted.small { margin: 4px 0 0; }
 .confirm .warning { margin: 6px 0; }
+.reveal input[type="checkbox"] { margin-right: 4px; vertical-align: -2px; }
