@@ -193,20 +193,59 @@ pub struct TagView {
     pub color: String,
 }
 
+#[derive(Debug, Default, Clone, Copy, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum TagMode {
+    /// Sessions must carry every selected tag.
+    #[default]
+    And,
+    /// Sessions must carry at least one selected tag.
+    Or,
+}
+
+#[derive(Debug, Default, Clone, Copy, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SortField {
+    #[default]
+    Updated,
+    Started,
+    Title,
+    Project,
+    Messages,
+    /// Number of matching messages; only meaningful with a query.
+    Hits,
+}
+
+#[derive(Debug, Default, Clone, Copy, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum SortDir {
+    Asc,
+    #[default]
+    Desc,
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub struct SearchParams {
     #[serde(default)]
     pub query: String,
+    /// Any of these sources (empty = all).
     #[serde(default)]
     pub source_keys: Vec<String>,
-    pub project_id: Option<i64>,
-    /// Sessions must carry every listed tag.
+    /// Any of these projects (empty = all).
+    #[serde(default)]
+    pub project_ids: Vec<i64>,
     #[serde(default)]
     pub tag_ids: Vec<i64>,
+    #[serde(default)]
+    pub tag_mode: TagMode,
     /// Inclusive lower bound on `updated_at` (RFC 3339).
     pub updated_from: Option<String>,
     /// Exclusive upper bound on `updated_at` (RFC 3339).
     pub updated_to: Option<String>,
+    #[serde(default)]
+    pub sort: SortField,
+    #[serde(default)]
+    pub sort_dir: SortDir,
     pub limit: Option<u32>,
 }
 
@@ -233,6 +272,9 @@ pub struct SearchHit {
     pub tags: Vec<TagView>,
     /// Excerpt with matches wrapped in `HIT_START` / `HIT_END`.
     pub snippet: Option<String>,
+    /// First matching message, used to build the snippet once the page is chosen.
+    #[serde(skip)]
+    first_hit_message: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -319,6 +361,21 @@ fn tags_by_session(conn: &Connection) -> rusqlite::Result<HashMap<String, Vec<Ta
     Ok(map)
 }
 
+/// `ORDER BY` clause for a sort field. Only fixed strings are ever placed in the SQL.
+fn order_by(sort: SortField, dir: SortDir) -> String {
+    let d = if dir == SortDir::Asc { "ASC" } else { "DESC" };
+    // Missing values sort last in either direction; ties fall back to newest first.
+    match sort {
+        SortField::Updated | SortField::Hits => format!("s.updated_at IS NULL, s.updated_at {d}"),
+        SortField::Started => format!("s.started_at IS NULL, s.started_at {d}, s.updated_at DESC"),
+        SortField::Title => format!(
+            "coalesce(t.title, s.title) = '', coalesce(t.title, s.title) COLLATE NOCASE {d}, s.updated_at DESC"
+        ),
+        SortField::Project => format!("p.display_name IS NULL, p.display_name COLLATE NOCASE {d}, s.updated_at DESC"),
+        SortField::Messages => format!("s.message_count {d}, s.updated_at DESC"),
+    }
+}
+
 pub fn search(conn: &Connection, p: &SearchParams) -> rusqlite::Result<SearchResult> {
     let terms = terms_of(&p.query);
     let limit = p.limit.unwrap_or(200).clamp(1, 1000) as usize;
@@ -351,23 +408,32 @@ pub fn search(conn: &Connection, p: &SearchParams) -> rusqlite::Result<SearchRes
          WHERE 1 = 1",
     );
     let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    let marks = |n: usize| vec!["?"; n].join(",");
     if !p.source_keys.is_empty() {
-        let marks = vec!["?"; p.source_keys.len()].join(",");
-        sql.push_str(&format!(" AND src.key IN ({marks})"));
+        sql.push_str(&format!(" AND src.key IN ({})", marks(p.source_keys.len())));
         for k in &p.source_keys {
             args.push(Box::new(k.clone()));
         }
     }
-    if let Some(pid) = p.project_id {
-        sql.push_str(" AND s.project_id = ?");
-        args.push(Box::new(pid));
+    if !p.project_ids.is_empty() {
+        sql.push_str(&format!(" AND s.project_id IN ({})", marks(p.project_ids.len())));
+        for id in &p.project_ids {
+            args.push(Box::new(*id));
+        }
     }
-    for tag in &p.tag_ids {
-        sql.push_str(
-            " AND EXISTS (SELECT 1 FROM session_tags st WHERE st.external_session_id = s.external_session_id \
-               AND st.tag_id = ?)",
+    if !p.tag_ids.is_empty() {
+        let count_sql = format!(
+            "(SELECT COUNT(DISTINCT st.tag_id) FROM session_tags st \
+               WHERE st.external_session_id = s.external_session_id AND st.tag_id IN ({}))",
+            marks(p.tag_ids.len())
         );
-        args.push(Box::new(*tag));
+        match p.tag_mode {
+            TagMode::And => sql.push_str(&format!(" AND {count_sql} = {}", p.tag_ids.len())),
+            TagMode::Or => sql.push_str(&format!(" AND {count_sql} > 0")),
+        }
+        for id in &p.tag_ids {
+            args.push(Box::new(*id));
+        }
     }
     if let Some(from) = p.updated_from.as_ref().filter(|t| !t.is_empty()) {
         sql.push_str(" AND s.updated_at >= ?");
@@ -377,9 +443,9 @@ pub fn search(conn: &Connection, p: &SearchParams) -> rusqlite::Result<SearchRes
         sql.push_str(" AND s.updated_at < ?");
         args.push(Box::new(to.clone()));
     }
-    sql.push_str(" ORDER BY s.updated_at DESC");
+    sql.push_str(" ORDER BY ");
+    sql.push_str(&order_by(p.sort, p.sort_dir));
 
-    let tags = tags_by_session(conn)?;
     let mut stmt = conn.prepare(&sql)?;
     let arg_refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|a| a.as_ref()).collect();
     let rows = stmt.query_map(arg_refs.as_slice(), |r| {
@@ -402,11 +468,11 @@ pub fn search(conn: &Connection, p: &SearchParams) -> rusqlite::Result<SearchRes
             hit_count: 0,
             tags: Vec::new(),
             snippet: None,
+            first_hit_message: None,
         })
     })?;
 
-    let mut hits = Vec::new();
-    let mut total = 0;
+    let mut all = Vec::new();
     for row in rows {
         let mut hit = row?;
         if let Some(m) = &matched {
@@ -414,23 +480,31 @@ pub fn search(conn: &Connection, p: &SearchParams) -> rusqlite::Result<SearchRes
                 continue;
             };
             hit.hit_count = *n;
-            if hits.len() < limit {
-                hit.snippet = match mid {
-                    Some(mid) => message_text(conn, *mid)?.map(|t| make_snippet(&t, &terms)),
-                    None => None,
-                };
-            }
+            hit.first_hit_message = *mid;
         }
-        total += 1;
-        if hits.len() < limit {
-            if let Some(ext) = &hit.external_session_id {
-                // Duplicated session ids share tags; clone so each copy shows them.
-                hit.tags = tags.get(ext).cloned().unwrap_or_default();
-            }
-            hits.push(hit);
+        all.push(hit);
+    }
+    if p.sort == SortField::Hits && matched.is_some() {
+        // Stable sort keeps the SQL order (newest first) among equal hit counts.
+        match p.sort_dir {
+            SortDir::Desc => all.sort_by(|a, b| b.hit_count.cmp(&a.hit_count)),
+            SortDir::Asc => all.sort_by(|a, b| a.hit_count.cmp(&b.hit_count)),
         }
     }
-    Ok(SearchResult { hits, total })
+
+    let total = all.len();
+    all.truncate(limit);
+    let tags = tags_by_session(conn)?;
+    for hit in &mut all {
+        if let Some(mid) = hit.first_hit_message {
+            hit.snippet = message_text(conn, mid)?.map(|t| make_snippet(&t, &terms));
+        }
+        if let Some(ext) = &hit.external_session_id {
+            // Duplicated session ids share tags; clone so each copy shows them.
+            hit.tags = tags.get(ext).cloned().unwrap_or_default();
+        }
+    }
+    Ok(SearchResult { hits: all, total })
 }
 
 fn message_text(conn: &Connection, id: i64) -> rusqlite::Result<Option<String>> {

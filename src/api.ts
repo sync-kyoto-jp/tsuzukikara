@@ -24,13 +24,20 @@ export interface TagUsage extends TagView {
   session_count: number;
 }
 
+export type TagMode = "and" | "or";
+export type SortField = "updated" | "started" | "title" | "project" | "messages" | "hits";
+export type SortDir = "asc" | "desc";
+
 export interface SearchParams {
   query: string;
   source_keys: string[];
-  project_id?: number | null;
+  project_ids: number[];
   tag_ids: number[];
+  tag_mode: TagMode;
   updated_from?: string | null;
   updated_to?: string | null;
+  sort: SortField;
+  sort_dir: SortDir;
   limit?: number;
 }
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, FilterOptions, SearchParams, SearchResult } from "../api";
+import { api, FilterOptions, SearchParams, SearchResult, SortDir, SortField, TagMode } from "../api";
 import Highlight from "../components/Highlight";
+import MultiSelect from "../components/MultiSelect";
 import { Splitter, useStoredWidth } from "../components/Splitter";
 import { TagChip } from "../components/Tags";
 import { useI18n } from "../i18n";
@@ -10,30 +11,44 @@ import SessionDetailView from "./SessionDetailView";
 const MIN_LIST_WIDTH = 320;
 const MIN_DETAIL_WIDTH = 360;
 
-type Period = "all" | "7" | "30" | "90" | "365" | "custom";
-const PERIODS: Period[] = ["all", "7", "30", "90", "365", "custom"];
+const SORT_FIELDS: SortField[] = ["updated", "started", "title", "project", "messages", "hits"];
+const QUICK_RANGES = [7, 30, 90, 365] as const;
+const SORT_STORAGE_KEY = "tsuzukikara.sort";
 
-function periodRange(period: Period, from: string, to: string): Pick<SearchParams, "updated_from" | "updated_to"> {
-  if (period === "all") return {};
-  if (period === "custom") {
-    // Dates are local calendar days; the index stores UTC instants.
-    const start = from ? new Date(`${from}T00:00:00`).toISOString() : null;
-    const end = to ? new Date(new Date(`${to}T00:00:00`).getTime() + 86_400_000).toISOString() : null;
-    return { updated_from: start, updated_to: end };
+/** Local calendar date (YYYY-MM-DD) for a date input. */
+function isoDate(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** From/To are inclusive local calendar days; the index stores UTC instants. */
+function dateRange(from: string, to: string): Pick<SearchParams, "updated_from" | "updated_to"> {
+  const start = from ? new Date(`${from}T00:00:00`).toISOString() : null;
+  const end = to ? new Date(new Date(`${to}T00:00:00`).getTime() + 86_400_000).toISOString() : null;
+  return { updated_from: start, updated_to: end };
+}
+
+function loadSort(): { field: SortField; dir: SortDir } {
+  try {
+    const v = JSON.parse(localStorage.getItem(SORT_STORAGE_KEY) ?? "null");
+    if (v && SORT_FIELDS.includes(v.field) && (v.dir === "asc" || v.dir === "desc")) return v;
+  } catch {
+    // Fall through to the default when storage is unavailable or malformed.
   }
-  return { updated_from: new Date(Date.now() - Number(period) * 86_400_000).toISOString() };
+  return { field: "updated", dir: "desc" };
 }
 
 export default function SearchView({ revision, onRescan }: { revision: number; onRescan: () => void }) {
   const { t, te, formatDate } = useI18n();
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
-  const [sourceKey, setSourceKey] = useState("");
-  const [projectId, setProjectId] = useState("");
-  const [tagIds, setTagIds] = useState<number[]>([]);
-  const [period, setPeriod] = useState<Period>("all");
+  const [sourceKeys, setSourceKeys] = useState<string[]>([]);
+  const [projectIds, setProjectIds] = useState<string[]>([]);
+  const [tagIds, setTagIds] = useState<string[]>([]);
+  const [tagMode, setTagMode] = useState<TagMode>("and");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  const [sort, setSortState] = useState(loadSort);
   const [options, setOptions] = useState<FilterOptions | null>(null);
   const [result, setResult] = useState<SearchResult | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -45,6 +60,15 @@ export default function SearchView({ revision, onRescan }: { revision: number; o
   const listRef = useRef<HTMLElement>(null);
   const [listWidth, setListWidth] = useStoredWidth("tsuzukikara.listWidth");
 
+  const setSort = (next: { field: SortField; dir: SortDir }) => {
+    setSortState(next);
+    try {
+      localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      // The sort order then lasts for this run only.
+    }
+  };
+
   useEffect(() => {
     const timer = setTimeout(() => setDebounced(query), 250);
     return () => clearTimeout(timer);
@@ -54,21 +78,27 @@ export default function SearchView({ revision, onRescan }: { revision: number; o
     api.filterOptions().then(setOptions).catch(setError);
   }, [revision, localRevision]);
 
-  // Drop filters on tags that were deleted.
+  // Drop selections that no longer exist (deleted tags, projects gone after a rescan).
   useEffect(() => {
-    if (options) setTagIds((ids) => ids.filter((id) => options.tags.some((tag) => tag.id === id)));
+    if (!options) return;
+    setTagIds((ids) => ids.filter((id) => options.tags.some((tag) => String(tag.id) === id)));
+    setProjectIds((ids) => ids.filter((id) => options.projects.some((p) => String(p.id) === id)));
+    setSourceKeys((keys) => keys.filter((k) => options.source_keys.includes(k)));
   }, [options]);
 
   const params: SearchParams = useMemo(
     () => ({
       query: debounced,
-      source_keys: sourceKey ? [sourceKey] : [],
-      project_id: projectId ? Number(projectId) : null,
-      tag_ids: tagIds,
-      ...periodRange(period, from, to),
+      source_keys: sourceKeys,
+      project_ids: projectIds.map(Number),
+      tag_ids: tagIds.map(Number),
+      tag_mode: tagMode,
+      ...dateRange(from, to),
+      sort: sort.field,
+      sort_dir: sort.dir,
       limit: 300,
     }),
-    [debounced, sourceKey, projectId, tagIds, period, from, to],
+    [debounced, sourceKeys, projectIds, tagIds, tagMode, from, to, sort],
   );
 
   useEffect(() => {
@@ -89,14 +119,19 @@ export default function SearchView({ revision, onRescan }: { revision: number; o
     };
   }, [params, revision, localRevision]);
 
+  // Projects of the selected environments only (all when none is selected).
   const projects = useMemo(
-    () => (options?.projects ?? []).filter((p) => !sourceKey || p.source_key === sourceKey),
-    [options, sourceKey],
+    () => (options?.projects ?? []).filter((p) => sourceKeys.length === 0 || sourceKeys.includes(p.source_key)),
+    [options, sourceKeys],
   );
-  const selectedTags = (options?.tags ?? []).filter((tag) => tagIds.includes(tag.id));
-  const unselectedTags = (options?.tags ?? []).filter((tag) => !tagIds.includes(tag.id));
+  const selectedTags = (options?.tags ?? []).filter((tag) => tagIds.includes(String(tag.id)));
   const empty = options && options.source_keys.length === 0;
   const onSessionChanged = useCallback(() => setLocalRevision((r) => r + 1), []);
+
+  function quickRange(days: number) {
+    setFrom(isoDate(new Date(Date.now() - (days - 1) * 86_400_000)));
+    setTo(isoDate(new Date()));
+  }
 
   return (
     <div
@@ -120,50 +155,112 @@ export default function SearchView({ revision, onRescan }: { revision: number; o
           />
         </div>
         <div className="filters">
-          <select value={sourceKey} onChange={(e) => { setSourceKey(e.target.value); setProjectId(""); }}>
-            <option value="">{t("search.allEnvironments")}</option>
-            {options?.source_keys.map((k) => (
-              <option key={k} value={k}>{sourceLabel(t, k)}</option>
+          <MultiSelect
+            allLabel={t("search.allEnvironments")}
+            label={t("search.environments")}
+            options={(options?.source_keys ?? []).map((k) => ({ value: k, label: sourceLabel(t, k), title: k }))}
+            selected={sourceKeys}
+            onChange={setSourceKeys}
+          />
+          <MultiSelect
+            allLabel={t("search.allProjects")}
+            label={t("search.projects")}
+            options={projects.map((p) => ({
+              value: String(p.id),
+              label: `${p.display_name} (${p.session_count})`,
+              title: p.project_path,
+            }))}
+            selected={projectIds}
+            onChange={setProjectIds}
+          />
+          <MultiSelect
+            allLabel={t("search.allTags")}
+            label={t("search.tags")}
+            options={(options?.tags ?? []).map((tag) => ({
+              value: String(tag.id),
+              label: tag.name,
+              render: (
+                <>
+                  <TagChip tag={tag} small /> <span className="muted small">{tag.session_count}</span>
+                </>
+              ),
+            }))}
+            selected={tagIds}
+            onChange={setTagIds}
+            header={
+              <div className="segmented" role="radiogroup" aria-label={t("search.tagMode")}>
+                {(["and", "or"] as TagMode[]).map((mode) => (
+                  <button
+                    key={mode}
+                    role="radio"
+                    aria-checked={tagMode === mode}
+                    className={tagMode === mode ? "active" : ""}
+                    onClick={() => setTagMode(mode)}
+                  >
+                    {t(mode === "and" ? "search.tagModeAnd" : "search.tagModeOr")}
+                  </button>
+                ))}
+              </div>
+            }
+          />
+        </div>
+        <div className="filters">
+          <span className="date-range">
+            <label className="muted small" htmlFor="date-from">{t("search.from")}</label>
+            <input id="date-from" type="date" value={from} max={to || undefined} onChange={(e) => setFrom(e.target.value)} />
+            <span aria-hidden>〜</span>
+            <label className="muted small" htmlFor="date-to">{t("search.to")}</label>
+            <input id="date-to" type="date" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} />
+          </span>
+          <select
+            value=""
+            aria-label={t("search.quickRange")}
+            onChange={(e) => e.target.value && quickRange(Number(e.target.value))}
+          >
+            <option value="">{t("search.quickRange")}</option>
+            {QUICK_RANGES.map((d) => (
+              <option key={d} value={d}>{t(`search.period.${d}` as const)}</option>
             ))}
           </select>
-          <select value={projectId} onChange={(e) => setProjectId(e.target.value)} className="project-select">
-            <option value="">{t("search.allProjects")}</option>
-            {projects.map((p) => (
-              <option key={p.id} value={p.id} title={p.project_path}>
-                {p.display_name} ({p.session_count})
-              </option>
-            ))}
-          </select>
-          <select value={period} onChange={(e) => setPeriod(e.target.value as Period)}>
-            {PERIODS.map((p) => (
-              <option key={p} value={p}>{t(`search.period.${p}` as const)}</option>
-            ))}
-          </select>
-          {period === "custom" && (
-            <span className="date-range">
-              <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
-              〜
-              <input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
-            </span>
+          {(from || to) && (
+            <button className="small-button" onClick={() => { setFrom(""); setTo(""); }}>
+              {t("search.clearDates")}
+            </button>
           )}
-          {unselectedTags.length > 0 && (
+          <span className="sort-control">
+            <label className="muted small" htmlFor="sort-field">{t("search.sortBy")}</label>
             <select
-              value=""
-              onChange={(e) => e.target.value && setTagIds((ids) => [...ids, Number(e.target.value)])}
+              id="sort-field"
+              value={sort.field}
+              onChange={(e) => setSort({ ...sort, field: e.target.value as SortField })}
             >
-              <option value="">{t("search.addTagFilter")}</option>
-              {unselectedTags.map((tag) => (
-                <option key={tag.id} value={tag.id}>
-                  {tag.name} ({tag.session_count})
+              {SORT_FIELDS.map((f) => (
+                <option key={f} value={f} disabled={f === "hits" && !debounced.trim()}>
+                  {t(`search.sort.${f}` as const)}
                 </option>
               ))}
             </select>
-          )}
+            <button
+              className="small-button"
+              onClick={() => setSort({ ...sort, dir: sort.dir === "asc" ? "desc" : "asc" })}
+              title={t(sort.dir === "asc" ? "search.sortAsc" : "search.sortDesc")}
+              aria-label={t(sort.dir === "asc" ? "search.sortAsc" : "search.sortDesc")}
+            >
+              {sort.dir === "asc" ? "↑" : "↓"} {t(sort.dir === "asc" ? "search.sortAsc" : "search.sortDesc")}
+            </button>
+          </span>
         </div>
         {selectedTags.length > 0 && (
           <div className="tag-row filter-tags">
+            {selectedTags.length > 1 && (
+              <span className="muted small">{t(tagMode === "and" ? "search.tagModeAnd" : "search.tagModeOr")}:</span>
+            )}
             {selectedTags.map((tag) => (
-              <TagChip key={tag.id} tag={tag} onRemove={() => setTagIds((ids) => ids.filter((i) => i !== tag.id))} />
+              <TagChip
+                key={tag.id}
+                tag={tag}
+                onRemove={() => setTagIds((ids) => ids.filter((i) => i !== String(tag.id)))}
+              />
             ))}
           </div>
         )}

@@ -289,3 +289,19 @@ input[type="checkbox"] { width: auto; margin: 0; padding: 0; flex: none; }
 }
 .banner .actions { margin: 0; }
 .banner.update { background: var(--selected); }
+
+/* Multi-select dropdowns, AND/OR toggle and sort control in the filter bar. */
+.multi-select { position: relative; display: inline-block; }
+.multi-select-button { display: inline-flex; align-items: center; gap: 6px; max-width: 220px; }
+.multi-select-button.active { border-color: var(--accent); background: var(--selected); }
+.multi-select-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.multi-select-popover { width: 300px; }
+.multi-select-options { list-style: none; margin: 4px 0; padding: 0; max-height: 260px; overflow-y: auto; }
+.option-line { font-weight: normal; margin: 0; padding: 4px 2px; border-radius: 4px; }
+.option-line:hover { background: var(--hover); }
+.option-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.segmented { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; margin-bottom: 6px; }
+.segmented button { border: none; border-radius: 0; padding: 3px 10px; font-size: 12px; }
+.segmented button.active { background: var(--accent); color: var(--accent-text); }
+.sort-control { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
+.date-range label { margin: 0 2px 0 4px; }

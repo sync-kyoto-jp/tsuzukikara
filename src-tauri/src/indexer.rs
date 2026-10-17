@@ -436,6 +436,69 @@ mod tests {
     }
 
     #[test]
+    fn multi_filters_tag_modes_and_sorting() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root_dir = tmp.path().join("projects");
+        let ids = [
+            "f0000000-0000-0000-0000-000000000001",
+            "f0000000-0000-0000-0000-000000000002",
+            "f0000000-0000-0000-0000-000000000003",
+        ];
+        // a: oldest start, newest update, most messages; c: no matches for "検索".
+        write_session(&root_dir, "C--p-alpha", ids[0], &[
+            user(ids[0], "2026-01-01T00:00:00.000Z", r"C:\p\alpha", "B 検索 検索"),
+            assistant(ids[0], "2026-01-01T00:01:00.000Z", "検索しました"),
+            assistant(ids[0], "2026-03-01T00:00:00.000Z", "続き"),
+        ]);
+        write_session(&root_dir, "C--p-beta", ids[1], &[
+            user(ids[1], "2026-02-01T00:00:00.000Z", r"C:\p\beta", "A 検索"),
+        ]);
+        write_session(&root_dir, "C--p-gamma", ids[2], &[
+            user(ids[2], "2026-02-15T00:00:00.000Z", r"C:\p\gamma", "C その他"),
+        ]);
+        let mut conn = db::open(&tmp.path().join("index.sqlite")).unwrap();
+        scan_source(&mut conn, &custom_root(&root_dir), &[], &mut |_, _| {}).unwrap();
+
+        fn names(conn: &Connection, p: db::SearchParams) -> Vec<String> {
+            db::search(conn, &p).unwrap().hits.into_iter().map(|h| h.project_name.unwrap()).collect()
+        }
+        macro_rules! run {
+            ($p:expr) => {
+                names(&conn, $p)
+            };
+        }
+        let base = || db::SearchParams::default();
+
+        // Sorting.
+        assert_eq!(run!(base()), ["alpha", "gamma", "beta"], "default: updated desc");
+        assert_eq!(run!(db::SearchParams { sort: db::SortField::Started, sort_dir: db::SortDir::Asc, ..base() }), ["alpha", "beta", "gamma"]);
+        assert_eq!(run!(db::SearchParams { sort: db::SortField::Title, sort_dir: db::SortDir::Asc, ..base() }), ["beta", "alpha", "gamma"]);
+        assert_eq!(run!(db::SearchParams { sort: db::SortField::Project, sort_dir: db::SortDir::Desc, ..base() }), ["gamma", "beta", "alpha"]);
+        assert_eq!(run!(db::SearchParams { sort: db::SortField::Messages, ..base() })[0], "alpha");
+        assert_eq!(
+            run!(db::SearchParams { query: "検索".into(), sort: db::SortField::Hits, sort_dir: db::SortDir::Asc, ..base() }),
+            ["beta", "alpha"]
+        );
+
+        // Multiple projects and sources.
+        let projects = db::list_projects(&conn).unwrap();
+        let pid = |name: &str| projects.iter().find(|p| p.display_name == name).unwrap().id;
+        assert_eq!(run!(db::SearchParams { project_ids: vec![pid("alpha"), pid("gamma")], ..base() }), ["alpha", "gamma"]);
+        let key = custom_root(&root_dir).key;
+        assert_eq!(run!(db::SearchParams { source_keys: vec![key, "wsl:None".into()], ..base() }).len(), 3);
+
+        // Tags: AND vs OR.
+        let x = db::create_tag(&conn, "x", "#ef4444").unwrap();
+        let y = db::create_tag(&conn, "y", "#3b82f6").unwrap();
+        db::set_session_tags(&mut conn, ids[0], &[x.id, y.id]).unwrap();
+        db::set_session_tags(&mut conn, ids[1], &[x.id]).unwrap();
+        db::set_session_tags(&mut conn, ids[2], &[y.id]).unwrap();
+        let tags = |conn: &Connection, mode: db::TagMode| names(conn, db::SearchParams { tag_ids: vec![x.id, y.id], tag_mode: mode, ..db::SearchParams::default() });
+        assert_eq!(tags(&conn, db::TagMode::And), ["alpha"]);
+        assert_eq!(tags(&conn, db::TagMode::Or), ["alpha", "gamma", "beta"]);
+    }
+
+    #[test]
     fn title_written_to_history_survives_rescan() {
         let tmp = tempfile::tempdir().unwrap();
         let root_dir = tmp.path().join("projects");
