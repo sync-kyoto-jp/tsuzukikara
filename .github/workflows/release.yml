@@ -1,0 +1,62 @@
+name: Release
+
+# Push a tag such as v0.2.0 to build the Windows installers and attach them to a
+# draft GitHub Release. Review the draft and publish it to make it visible.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check that the tag matches package.json
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $version"
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Build installers and create draft release
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: Tsuzukikara ${{ github.ref_name }}
+          releaseBody: |
+            ## Download
+
+            - **Tsuzukikara_*_x64-setup.exe** — installer for most users
+            - **Tsuzukikara_*_x64_en-US.msi** — for deployment tools (Group Policy, Intune)
+
+            The installers are not code-signed yet, so Windows SmartScreen may show a warning.
+            Choose "More info" → "Run anyway" to continue.
+
+            See the commits since the previous release for changes.
+          releaseDraft: true
+          prerelease: false

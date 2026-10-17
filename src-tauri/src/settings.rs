@@ -17,6 +17,14 @@ pub struct Settings {
     pub excluded_paths: Vec<String>,
     /// UI language code (e.g. `ja`, `en`). `None` follows the OS language.
     pub language: Option<String>,
+    /// Opt-in daily update check. `None` means the user has not been asked yet.
+    pub update_check: Option<bool>,
+    /// RFC 3339 time of the last successful update check.
+    pub last_update_check: Option<String>,
+    /// Latest release seen by the last check (version, release page URL).
+    pub latest_release: Option<(String, String)>,
+    /// A release version the user chose not to be reminded about.
+    pub skipped_version: Option<String>,
 }
 
 impl Default for Settings {
@@ -27,6 +35,10 @@ impl Default for Settings {
             extra_roots: Vec::new(),
             excluded_paths: Vec::new(),
             language: None,
+            update_check: None,
+            last_update_check: None,
+            latest_release: None,
+            skipped_version: None,
         }
     }
 }

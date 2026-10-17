@@ -23,6 +23,9 @@ serde_json = "1"
 # `bundled` compiles SQLite in with FTS5 enabled, so search does not depend on a system SQLite.
 rusqlite = { version = "0.37", features = ["bundled"] }
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+# Opt-in update check only (one HTTPS GET to the GitHub releases API).
+ureq = "2"
+semver = "1"
 
 [dev-dependencies]
 tempfile = "3"

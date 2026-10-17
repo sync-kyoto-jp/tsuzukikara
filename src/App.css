@@ -276,3 +276,16 @@ input[type="checkbox"] { width: auto; margin: 0; padding: 0; flex: none; }
   outline: none;
 }
 .detail-pane { min-width: 0; }
+
+/* Notices under the top bar (update check consent, new release). */
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 16px;
+  background: var(--hover);
+  border-bottom: 1px solid var(--border);
+}
+.banner .actions { margin: 0; }
+.banner.update { background: var(--selected); }

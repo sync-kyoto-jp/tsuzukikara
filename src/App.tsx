@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import "./App.css";
 import { api, ScanProgress } from "./api";
 import { useI18n } from "./i18n";
+import UpdateBanner from "./components/UpdateBanner";
 import { sourceLabel } from "./labels";
 import SearchView from "./views/SearchView";
 import SourcesView from "./views/SourcesView";
@@ -83,6 +84,7 @@ export default function App() {
           </button>
         </div>
       </header>
+      <UpdateBanner />
       <main className="content">
         {tab === "search" && <SearchView revision={revision} onRescan={rescan} />}
         {tab === "sources" && <SourcesView revision={revision} onChanged={bump} />}

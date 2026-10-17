@@ -163,6 +163,17 @@ export interface ResumePlan {
   working_dir: string | null;
 }
 
+export interface UpdateStatus {
+  current_version: string;
+  /** `null` until the user decides whether to enable automatic checks. */
+  enabled: boolean | null;
+  last_checked: string | null;
+  latest_version: string | null;
+  release_url: string | null;
+  available: boolean;
+  error: AppError | null;
+}
+
 export interface AppInfo {
   version: string;
   data_dir: string;
@@ -194,6 +205,10 @@ export const api = {
   resumeSession: (id: number) => invoke<void>("resume_session", { id }),
   deleteIndex: () => invoke<void>("delete_index"),
   appInfo: () => invoke<AppInfo>("app_info"),
+  checkForUpdates: (force: boolean) => invoke<UpdateStatus>("check_for_updates", { force }),
+  setUpdateCheck: (enabled: boolean) => invoke<UpdateStatus>("set_update_check", { enabled }),
+  skipUpdateVersion: (version: string) => invoke<UpdateStatus>("skip_update_version", { version }),
+  openReleasePage: (url: string) => invoke<void>("open_release_page", { url }),
   onScanProgress: (cb: (p: ScanProgress) => void): Promise<UnlistenFn> =>
     listen<ScanProgress>("scan-progress", (e) => cb(e.payload)),
 };

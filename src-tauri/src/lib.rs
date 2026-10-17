@@ -6,6 +6,7 @@ mod parser;
 mod resume;
 mod settings;
 mod sources;
+mod update_check;
 
 use error::AppError;
 use serde::Serialize;
@@ -381,6 +382,88 @@ fn delete_index(state: State<AppState>) -> CmdResult<()> {
 }
 
 #[derive(Serialize)]
+struct UpdateStatus {
+    current_version: String,
+    /// `None` until the user decides whether to enable automatic checks.
+    enabled: Option<bool>,
+    last_checked: Option<String>,
+    latest_version: Option<String>,
+    release_url: Option<String>,
+    /// A newer release exists and the user has not skipped it.
+    available: bool,
+    error: Option<AppError>,
+}
+
+fn update_status(app: &tauri::AppHandle, s: &Settings, error: Option<AppError>) -> UpdateStatus {
+    let current = app.package_info().version.to_string();
+    let (latest_version, release_url) = s.latest_release.clone().unzip();
+    let available = latest_version.as_deref().is_some_and(|v| {
+        update_check::is_newer(v, &current) && s.skipped_version.as_deref() != Some(v)
+    });
+    UpdateStatus {
+        current_version: current,
+        enabled: s.update_check,
+        last_checked: s.last_update_check.clone(),
+        latest_version,
+        release_url,
+        available,
+        error,
+    }
+}
+
+fn checked_recently(s: &Settings) -> bool {
+    s.last_update_check
+        .as_deref()
+        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+        .is_some_and(|t| chrono::Utc::now().signed_duration_since(t) < chrono::Duration::hours(update_check::CHECK_INTERVAL_HOURS))
+}
+
+/// Returns the update status. With `force` it always queries GitHub ("Check now"); otherwise it
+/// queries only when automatic checks are enabled and the last check is older than a day.
+#[tauri::command]
+async fn check_for_updates(app: tauri::AppHandle, force: bool) -> CmdResult<UpdateStatus> {
+    let settings = app.state::<AppState>().settings.lock().unwrap().clone();
+    if !force && (settings.update_check != Some(true) || checked_recently(&settings)) {
+        return Ok(update_status(&app, &settings, None));
+    }
+    let current = app.package_info().version.to_string();
+    let result = tauri::async_runtime::spawn_blocking(move || update_check::fetch_latest(&current))
+        .await
+        .map_err(AppError::internal)?;
+    let state = app.state::<AppState>();
+    match result {
+        Ok(latest) => {
+            let s = save_settings(&state, |s| {
+                s.last_update_check = Some(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+                s.latest_release = latest.map(|r| (r.version, r.url));
+            })?;
+            Ok(update_status(&app, &s, None))
+        }
+        Err(e) => {
+            let s = state.settings.lock().unwrap().clone();
+            Ok(update_status(&app, &s, Some(e)))
+        }
+    }
+}
+
+#[tauri::command]
+fn set_update_check(app: tauri::AppHandle, state: State<AppState>, enabled: bool) -> CmdResult<UpdateStatus> {
+    let s = save_settings(&state, |s| s.update_check = Some(enabled))?;
+    Ok(update_status(&app, &s, None))
+}
+
+#[tauri::command]
+fn skip_update_version(app: tauri::AppHandle, state: State<AppState>, version: String) -> CmdResult<UpdateStatus> {
+    let s = save_settings(&state, |s| s.skipped_version = Some(version))?;
+    Ok(update_status(&app, &s, None))
+}
+
+#[tauri::command]
+fn open_release_page(url: String) -> CmdResult<()> {
+    update_check::open_release_page(&url)
+}
+
+#[derive(Serialize)]
 struct AppInfo {
     version: String,
     data_dir: String,
@@ -439,6 +522,10 @@ pub fn run() {
             resume_session,
             delete_index,
             app_info,
+            check_for_updates,
+            set_update_check,
+            skip_update_version,
+            open_release_page,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

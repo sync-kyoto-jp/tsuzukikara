@@ -6,7 +6,7 @@ AI agent conversation history is assumed to contain sensitive information such a
 
 ## Safeguards
 
-- **No network access**: the app has no networking dependencies. The WebView's CSP (`connect-src ipc:`) blocks outbound connections.
+- **No network access by default**: the WebView's CSP (`connect-src ipc:`) blocks outbound connections. The only network request the app can make is the opt-in update check: after the user enables it (or presses "Check now"), the backend sends one unauthenticated HTTPS GET to `api.github.com/repos/sync-kyoto-jp/tsuzukikara/releases/latest` at most once a day. No history, settings or identifiers are sent, nothing is downloaded or installed, and only release-page links of this repository are opened.
 - **Read-only history by default**: history files are opened for reading only. The single exception is an explicit, per-save choice to write a session name to Claude Code's history; the app then verifies the file's session id, appends one `custom-title` record with a single append-mode write, and never rewrites existing content.
 - **Minimal index**: tool results and thinking blocks are not indexed.
 - **No content in logs**: scan errors record only the file path, an error code and a short system message, never conversation content.

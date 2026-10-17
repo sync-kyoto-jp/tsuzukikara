@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, AppInfo, Settings, TagUsage } from "../api";
+import { api, AppInfo, Settings, TagUsage, UpdateStatus } from "../api";
 import { TagChip, TagEditor } from "../components/Tags";
 import { useI18n } from "../i18n";
 import { LOCALES } from "../i18n/locales";
@@ -70,6 +70,8 @@ export default function SettingsView({ onChanged }: { onChanged: () => void }) {
         </select>
       </section>
 
+      <UpdateSettings onError={showError} />
+
       <TagManager onChanged={onChanged} onError={showError} />
 
       <section>
@@ -127,6 +129,68 @@ export default function SettingsView({ onChanged }: { onChanged: () => void }) {
         <p>Tsuzukikara {info?.version ?? ""} — MIT License</p>
       </section>
     </div>
+  );
+}
+
+function UpdateSettings({ onError }: { onError: (e: unknown) => void }) {
+  const { t, te, formatDate } = useI18n();
+  const [status, setStatus] = useState<UpdateStatus | null>(null);
+  const [checking, setChecking] = useState(false);
+
+  useEffect(() => {
+    api.checkForUpdates(false).then(setStatus).catch(onError);
+  }, [onError]);
+
+  async function checkNow() {
+    setChecking(true);
+    try {
+      setStatus(await api.checkForUpdates(true));
+    } catch (e) {
+      onError(e);
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  if (!status) return null;
+  const newer =
+    status.latest_version && status.release_url && status.latest_version !== status.current_version
+      ? { version: status.latest_version, url: status.release_url }
+      : null;
+
+  return (
+    <section>
+      <h3>{t("settings.updates")}</h3>
+      <label className="checkbox-line">
+        <input
+          type="checkbox"
+          checked={status.enabled === true}
+          onChange={(e) => api.setUpdateCheck(e.target.checked).then(setStatus).catch(onError)}
+        />
+        {t("settings.updateAuto")}
+      </label>
+      <p className="muted small">{t("settings.updateHint")}</p>
+      <div className="actions">
+        <button onClick={checkNow} disabled={checking}>
+          {checking ? t("settings.checking") : t("settings.checkNow")}
+        </button>
+        {status.error ? (
+          <span className="error inline">{te(status.error)}</span>
+        ) : newer && status.available ? (
+          <>
+            <span>{t("update.available", { version: newer.version, current: status.current_version })}</span>
+            <button className="primary" onClick={() => api.openReleasePage(newer.url).catch(onError)}>
+              {t("update.open")}
+            </button>
+          </>
+        ) : status.last_checked ? (
+          <span className="muted">{t("settings.upToDate", { version: status.current_version })}</span>
+        ) : null}
+      </div>
+      {status.last_checked && (
+        <p className="muted small">{t("settings.lastChecked", { date: formatDate(status.last_checked) })}</p>
+      )}
+    </section>
   );
 }
 
