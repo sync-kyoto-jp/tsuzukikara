@@ -1,3 +1,5 @@
+<p align="center"><img src="app-icon.png" alt="Tsuzukikara icon" width="128"></p>
+
 # Tsuzukikara（つづきから）
 
 > Like the "つづきから" (Continue) screen in Japanese RPGs — find any AI coding session and pick it up right where you left off.
