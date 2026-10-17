@@ -38,6 +38,7 @@ const ja: Messages = {
   "search.duplicates": "重複 {count}",
   "search.duplicatesTitle": "同じセッションIDの別ファイルがあります",
   "search.selectSession": "左の一覧からセッションを選択してください",
+  "search.resizeHandle": "ドラッグで一覧と詳細の幅を変更（ダブルクリックで元に戻す）",
 
   "session.untitled": "(無題のセッション)",
   "session.loading": "読み込み中…",

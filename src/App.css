@@ -91,8 +91,8 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; padding: 0 1
 .content { flex: 1; min-height: 0; }
 
 /* Search */
-.search-layout { display: grid; grid-template-columns: minmax(380px, 42%) 1fr; height: 100%; }
-.search-pane { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--border); padding: 12px; }
+.search-layout { display: grid; grid-template-columns: minmax(380px, 42%) auto 1fr; height: 100%; }
+.search-pane { display: flex; flex-direction: column; min-height: 0; min-width: 0; padding: 12px; }
 .search-box input { width: 100%; font-size: 16px; padding: 8px 12px; }
 .filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
 .filters select { max-width: 100%; }
@@ -259,3 +259,20 @@ input[type="checkbox"] { width: auto; margin: 0; padding: 0; flex: none; }
 .tag-editor .muted.small { margin: 4px 0 0; }
 .confirm .warning { margin: 6px 0; }
 .reveal input[type="checkbox"] { margin-right: 4px; vertical-align: -2px; }
+
+/* Draggable divider between the result list and the detail pane. */
+.splitter {
+  width: 6px;
+  cursor: col-resize;
+  background: var(--border);
+  background-clip: content-box;
+  padding: 0 2px;
+  touch-action: none;
+  transition: background-color 0.15s;
+}
+.splitter:hover, .splitter.dragging, .splitter:focus-visible {
+  background-color: var(--accent);
+  padding: 0 1px;
+  outline: none;
+}
+.detail-pane { min-width: 0; }

@@ -38,6 +38,7 @@ const ko: Messages = {
   "search.duplicates": "중복 {count}",
   "search.duplicatesTitle": "같은 세션 ID를 가진 다른 파일이 있습니다",
   "search.selectSession": "목록에서 세션을 선택하세요",
+  "search.resizeHandle": "드래그하여 목록과 상세 영역의 너비 변경 (더블클릭하면 원래대로)",
 
   "session.untitled": "(제목 없는 세션)",
   "session.loading": "불러오는 중…",

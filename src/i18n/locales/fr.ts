@@ -38,6 +38,7 @@ const fr: Messages = {
   "search.duplicates": "Doublon {count}",
   "search.duplicatesTitle": "D'autres fichiers contiennent le même identifiant de session",
   "search.selectSession": "Sélectionnez une session dans la liste",
+  "search.resizeHandle": "Faites glisser pour redimensionner la liste et le détail (double-clic pour réinitialiser)",
 
   "session.untitled": "(Session sans titre)",
   "session.loading": "Chargement…",

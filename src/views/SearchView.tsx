@@ -1,10 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, FilterOptions, SearchParams, SearchResult } from "../api";
 import Highlight from "../components/Highlight";
+import { Splitter, useStoredWidth } from "../components/Splitter";
 import { TagChip } from "../components/Tags";
 import { useI18n } from "../i18n";
 import { sourceLabel, titleOrUntitled } from "../labels";
 import SessionDetailView from "./SessionDetailView";
+
+const MIN_LIST_WIDTH = 320;
+const MIN_DETAIL_WIDTH = 360;
 
 type Period = "all" | "7" | "30" | "90" | "365" | "custom";
 const PERIODS: Period[] = ["all", "7", "30", "90", "365", "custom"];
@@ -37,6 +41,9 @@ export default function SearchView({ revision, onRescan }: { revision: number; o
   const [selected, setSelected] = useState<number | null>(null);
   // Bumped when a session's tags or name change in the detail pane.
   const [localRevision, setLocalRevision] = useState(0);
+  const layoutRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLElement>(null);
+  const [listWidth, setListWidth] = useStoredWidth("tsuzukikara.listWidth");
 
   useEffect(() => {
     const timer = setTimeout(() => setDebounced(query), 250);
@@ -92,8 +99,17 @@ export default function SearchView({ revision, onRescan }: { revision: number; o
   const onSessionChanged = useCallback(() => setLocalRevision((r) => r + 1), []);
 
   return (
-    <div className="search-layout">
-      <section className="search-pane">
+    <div
+      className="search-layout"
+      ref={layoutRef}
+      style={
+        listWidth != null
+          ? // min() keeps the detail pane usable when the window is narrower than when resized.
+            { gridTemplateColumns: `min(${listWidth}px, calc(100% - ${MIN_DETAIL_WIDTH}px)) auto 1fr` }
+          : undefined
+      }
+    >
+      <section className="search-pane" ref={listRef}>
         <div className="search-box">
           <input
             autoFocus
@@ -204,6 +220,15 @@ export default function SearchView({ revision, onRescan }: { revision: number; o
           ))}
         </ul>
       </section>
+      <Splitter
+        containerRef={layoutRef}
+        leftRef={listRef}
+        width={listWidth}
+        onChange={setListWidth}
+        minLeft={MIN_LIST_WIDTH}
+        minRight={MIN_DETAIL_WIDTH}
+        label={t("search.resizeHandle")}
+      />
       <section className="detail-pane">
         {selected != null ? (
           <SessionDetailView id={selected} query={debounced} onChanged={onSessionChanged} />

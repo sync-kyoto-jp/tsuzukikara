@@ -38,6 +38,7 @@ const es: Messages = {
   "search.duplicates": "Duplicado {count}",
   "search.duplicatesTitle": "Otros archivos contienen el mismo ID de sesión",
   "search.selectSession": "Selecciona una sesión de la lista",
+  "search.resizeHandle": "Arrastra para cambiar el ancho de la lista y el detalle (doble clic para restablecer)",
 
   "session.untitled": "(Sesión sin título)",
   "session.loading": "Cargando…",

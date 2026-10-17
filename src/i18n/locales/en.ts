@@ -38,6 +38,7 @@ const en = {
   "search.duplicates": "Duplicate {count}",
   "search.duplicatesTitle": "Other files contain the same session id",
   "search.selectSession": "Select a session from the list",
+  "search.resizeHandle": "Drag to resize the list and detail panes (double-click to reset)",
 
   "session.untitled": "(Untitled session)",
   "session.loading": "Loading…",
